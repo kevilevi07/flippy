@@ -1,13 +1,13 @@
 [package]
-name = "flippy"
+name = "trupx"
 version = "0.1.0"
 edition = "2021"
 authors = ["shashti.s@finstein.ai"]
-description = "Flippy - a lightweight web terminal with a built-in self-hosted tunnel"
+description = "Trupx - a lightweight web terminal with a built-in self-hosted tunnel"
 license = "MIT"
 
 [[bin]]
-name = "flippy"
+name = "trupx"
 path = "src/main.rs"
 
 [dependencies]

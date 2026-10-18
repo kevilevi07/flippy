@@ -5,7 +5,7 @@ use std::{fs, path::PathBuf};
 
 #[derive(Default, Serialize, Deserialize, Debug)]
 pub struct Config {
-    /// Base URL of the flippy server, e.g. https://tunnel.example.com
+    /// Base URL of the trupx server, e.g. https://tunnel.example.com
     pub server: Option<String>,
     /// Vercel OAuth access token.
     pub token: Option<String>,
@@ -14,7 +14,7 @@ pub struct Config {
 }
 
 pub fn path() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from("dev", "flippy", "flippy")
+    let dirs = ProjectDirs::from("dev", "trupx", "trupx")
         .context("could not resolve config dir")?;
     Ok(dirs.config_dir().join("config.json"))
 }
@@ -48,6 +48,6 @@ impl Config {
     pub fn require_token(&self) -> Result<&str> {
         self.token
             .as_deref()
-            .context("not logged in. Run: flippy login")
+            .context("not logged in. Run: trupx login")
     }
 }

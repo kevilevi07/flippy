@@ -2,11 +2,11 @@
 setlocal
 cd /d "%~dp0"
 
-echo [flippy] stopping any running instance...
-taskkill /F /IM flippy.exe >nul 2>&1
-if exist "%TEMP%\flippy.pid" del /Q "%TEMP%\flippy.pid" >nul 2>&1
+echo [trupx] stopping any running instance...
+taskkill /F /IM trupx.exe >nul 2>&1
+if exist "%TEMP%\trupx.pid" del /Q "%TEMP%\trupx.pid" >nul 2>&1
 
-echo [flippy] checking for cargo...
+echo [trupx] checking for cargo...
 where cargo >nul 2>&1
 if errorlevel 1 (
     if exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
@@ -20,7 +20,7 @@ if errorlevel 1 (
     )
 )
 
-echo [flippy] building release...
+echo [trupx] building release...
 pushd terminal
 cargo build --release
 if errorlevel 1 (
@@ -32,15 +32,15 @@ if errorlevel 1 (
 popd
 
 if not exist dist mkdir dist
-copy /Y terminal\target\release\flippy.exe dist\flippy.exe >nul
+copy /Y terminal\target\release\trupx.exe dist\trupx.exe >nul
 
 echo.
-echo [flippy] build complete.
-for %%A in (dist\flippy.exe) do echo        output: %%~fA  (%%~zA bytes^)
+echo [trupx] build complete.
+for %%A in (dist\trupx.exe) do echo        output: %%~fA  (%%~zA bytes^)
 echo.
 echo Run:
-echo     dist\flippy.exe
-echo     dist\flippy.exe --tunnel
+echo     dist\trupx.exe
+echo     dist\trupx.exe --tunnel
 echo.
 
 endlocal

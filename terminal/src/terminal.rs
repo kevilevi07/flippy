@@ -1,4 +1,4 @@
-//! Flippy local web terminal server. This module is a library used by
+//! Trupx local web terminal server. This module is a library used by
 //! `main.rs`; it has no `fn main()` of its own.
 
 use std::collections::HashSet;
@@ -58,13 +58,13 @@ struct LoginResp {
 
 pub fn pid_file() -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push("flippy.pid");
+    p.push("trupx.pid");
     p
 }
 
 pub fn log_file() -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push("flippy.log");
+    p.push("trupx.log");
     p
 }
 
@@ -97,7 +97,7 @@ pub fn message_box(title: &str, body: &str) {
 pub fn message_box(_: &str, _: &str) {}
 
 pub fn default_shell() -> String {
-    if let Ok(s) = std::env::var("FLIPPY_SHELL") {
+    if let Ok(s) = std::env::var("TRUPX_SHELL") {
         return s;
     }
     if cfg!(windows) {
@@ -174,9 +174,9 @@ pub async fn serve(user: String, pass: String, shell: String, port: u16) {
         Err(e) => {
             append_log(&format!("bind failed on port {}: {}", port, e));
             message_box(
-                "Flippy",
+                "Trupx",
                 &format!(
-                    "Cannot bind to port {}:\n{}\n\nIs another instance already running? Try `flippy stop`.",
+                    "Cannot bind to port {}:\n{}\n\nIs another instance already running? Try `trupx stop`.",
                     port, e
                 ),
             );
@@ -204,7 +204,7 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
         .split(';')
         .filter_map(|p| {
             let p = p.trim();
-            p.strip_prefix("flippy_sid=").map(|v| v.to_string())
+            p.strip_prefix("trupx_sid=").map(|v| v.to_string())
         })
         .next()
 }
@@ -226,7 +226,7 @@ async fn login_handler(State(st): State<AppState>, Json(body): Json<LoginReq>) -
     let token = new_token();
     st.sessions.write().await.insert(token.clone());
     let cookie = format!(
-        "flippy_sid={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
+        "trupx_sid={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
         token
     );
     (
@@ -243,7 +243,7 @@ async fn logout_handler(State(st): State<AppState>, headers: HeaderMap) -> Respo
     }
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, "flippy_sid=; Path=/; Max-Age=0".to_string())],
+        [(header::SET_COOKIE, "trupx_sid=; Path=/; Max-Age=0".to_string())],
     )
         .into_response()
 }
@@ -320,7 +320,7 @@ async fn handle_socket(socket: WebSocket, shell: String) {
             append_log(&format!("spawn {} failed: {}", shell, e));
             let _ = ws_tx
                 .send(Message::Text(format!(
-                    "\r\n[flippy] cannot spawn {}: {}\r\n",
+                    "\r\n[trupx] cannot spawn {}: {}\r\n",
                     shell, e
                 )))
                 .await;

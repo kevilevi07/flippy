@@ -50,7 +50,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const publicBase = (process.env.PUBLIC_URL ?? url.origin).replace(/\/$/, "");
-  const publicUrl = `${publicBase}/t/${tid}`;
+  const publicUrl = `${publicBase}/${tid}`;
 
   return upgradeWebSocket(async (ws: WebSocket) => {
     await kv.set(keys.tunnel(tid), "1", TUNNEL_TTL_SECONDS);

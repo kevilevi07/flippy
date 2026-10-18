@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "flippy — self-hosted web terminal tunnel",
+  title: "trupx — self-hosted web terminal tunnel",
   description: "A web terminal and ngrok-style tunnel that runs on your own Fly.io app.",
 };
 

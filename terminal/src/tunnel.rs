@@ -158,7 +158,7 @@ async fn one_session(
             let hint = if status == 400 {
                 "  (hint: --name must be 2-32 chars, lowercase a-z, 0-9, hyphens; or omit it)"
             } else if status == 401 {
-                "  (hint: run `flippy login` with a valid fly_ token)"
+                "  (hint: run `trupx login` with a valid fly_ token)"
             } else {
                 ""
             };
@@ -316,7 +316,7 @@ async fn forward(
     for (k, v) in headers {
         let kl = k.to_ascii_lowercase();
         // Drop hop-by-hop + "accept-encoding" so the local app returns the
-        // body uncompressed. The gateway (flippy server) needs plain bytes
+        // body uncompressed. The gateway (trupx server) needs plain bytes
         // to inject the SPA shim into HTML responses, and reqwest here isn't
         // compiled with gzip/brotli support.
         if matches!(

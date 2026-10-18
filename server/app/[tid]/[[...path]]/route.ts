@@ -1,4 +1,4 @@
-// Public catch-all. Any request to /t/<tid>/<rest> is forwarded through
+// Public catch-all. Any request to /<tid>/<rest> is forwarded through
 // Postgres pub/sub to the Function instance holding the CLI's WebSocket.
 //
 // WebSocket upgrades: when the incoming request wants to upgrade to WS, we
@@ -12,6 +12,7 @@ import type { Frame } from "@/lib/proto";
 import { newId } from "@/lib/proto";
 import { keys, kv, pubsub } from "@/lib/db";
 import { injectShim } from "@/lib/html-shim";
+import { isValidName } from "@/lib/names";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +24,12 @@ type Ctx = { params: Promise<{ tid: string; path?: string[] }> };
 
 async function handle(req: Request, ctx: Ctx): Promise<Response> {
   const { tid, path } = await ctx.params;
+
+  // Hard-stop reserved names so a stray /favicon.ico or /install.sh request
+  // (that somehow bypassed static resolution) never hits the tunnel pipe.
+  if (!isValidName(tid)) {
+    return new Response("not found", { status: 404, headers: { "content-type": "text/plain" } });
+  }
 
   const alive = await kv.exists(keys.tunnel(tid));
   if (!alive) {
@@ -114,7 +121,7 @@ async function handle(req: Request, ctx: Ctx): Promise<Response> {
     // stays inside the tunnel.
     let value = v;
     if (kl === "location" && value.startsWith("/") && !value.startsWith("//")) {
-      const prefix = `/t/${tid}`;
+      const prefix = `/${tid}`;
       if (value !== prefix && !value.startsWith(prefix + "/")) {
         value = prefix + value;
       }

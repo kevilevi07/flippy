@@ -4,7 +4,7 @@ use std::io::{self, Write};
 
 pub async fn run(cfg: &mut Config, token_arg: Option<String>) -> Result<()> {
     if cfg.server.is_none() {
-        print!("Server URL (e.g. https://flippy.vercel.app): ");
+        print!("Server URL (e.g. https://trupx.vercel.app): ");
         io::stdout().flush()?;
         let mut buf = String::new();
         io::stdin().read_line(&mut buf)?;

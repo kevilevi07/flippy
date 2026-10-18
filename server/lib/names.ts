@@ -1,15 +1,22 @@
-// Rules for app names (first segment under /app/).
+// Rules for app names (first segment under /).
 
-// Only names that collide with the server's own paths are reserved.
+// Names reserved for the server's own routes/assets.
 export const RESERVED_NAMES = new Set([
   "api",
   "_next",
   "favicon.ico",
   "robots.txt",
   "sitemap.xml",
-  // Reserved for future top-level routes under /app/.
+  "install.ps1",
+  "install.sh",
+  // Reserved for future top-level routes.
   "admin",
   "settings",
+  "login",
+  "logout",
+  "dashboard",
+  "signup",
+  "download",
 ]);
 
 // 2-32 chars: start/end alphanumeric; hyphens allowed only in the middle.

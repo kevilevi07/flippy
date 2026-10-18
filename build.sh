@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Flippy build for Linux / macOS / Termux
+# Trupx build for Linux / macOS / Termux
 set -eu
 cd "$(dirname "$0")"
 
@@ -24,19 +24,19 @@ if ! command -v cargo >/dev/null 2>&1; then
     fi
 fi
 
-echo "[flippy] building release..."
+echo "[trupx] building release..."
 ( cd terminal && cargo build --release )
 
 mkdir -p dist
-cp -f terminal/target/release/flippy dist/flippy
-chmod +x dist/flippy
+cp -f terminal/target/release/trupx dist/trupx
+chmod +x dist/trupx
 
-size="$(wc -c < dist/flippy | tr -d ' ')"
+size="$(wc -c < dist/trupx | tr -d ' ')"
 echo
-echo "[flippy] build complete."
-echo "        output: $(pwd)/dist/flippy  ($size bytes)"
+echo "[trupx] build complete."
+echo "        output: $(pwd)/dist/trupx  ($size bytes)"
 echo
 echo "Run:"
-echo "    ./dist/flippy"
-echo "    ./dist/flippy --tunnel"
+echo "    ./dist/trupx"
+echo "    ./dist/trupx --tunnel"
 echo

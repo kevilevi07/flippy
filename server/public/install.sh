@@ -1,131 +1,101 @@
-#!/usr/bin/env bash
-# flippy installer — downloads a prebuilt binary. No Rust required.
+#!/usr/bin/env sh
+# Trupx install for Linux / macOS / Termux.
 #
-# Usage:
-#   curl -sSL https://flippy.vercel.app/install.sh | bash
-#   curl -sSL https://flippy.vercel.app/install.sh | bash -s -- <token>
+#   curl -sSL trupx.vercel.app/install.sh | sh
+#   # or with auto-login:
+#   curl -sSL trupx.vercel.app/install.sh | sh -s -- <YOUR_TOKEN>
 
-set -euo pipefail
+set -eu
 
-BASE_URL="${FLIPPY_BASE_URL:-https://flippy.vercel.app}"
-BIN_BASE="$BASE_URL/bin"
-INSTALL_DIR="$HOME/.flippy/bin"
-BIN="$INSTALL_DIR/flippy"
+SERVER='https://trupx.vercel.app'
+INSTALL_DIR="${HOME}/.trupx/bin"
+EXE="${INSTALL_DIR}/trupx"
+TOKEN="${1:-${TRUPX_TOKEN:-}}"
 
-# ----- platform detect -----
-is_termux() { [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q "com.termux"; }
-
-OS="$(uname -s 2>/dev/null || echo unknown)"
-ARCH="$(uname -m 2>/dev/null || echo unknown)"
-
-case "$OS/$ARCH" in
-  Linux/x86_64|Linux/amd64)                ASSET="flippy-linux-x64"   ; PLATFORM="Linux x64" ;;
-  Linux/aarch64|Linux/arm64)               ASSET="flippy-linux-arm64" ; PLATFORM="Linux ARM64" ;;
-  Darwin/x86_64)                           ASSET="flippy-darwin-x64"  ; PLATFORM="macOS Intel" ;;
-  Darwin/arm64)                            ASSET="flippy-darwin-arm64"; PLATFORM="macOS Apple Silicon" ;;
-  *)                                       ASSET=""                   ; PLATFORM="$OS/$ARCH" ;;
+# Detect platform.
+UNAME_S="$(uname -s | tr '[:upper:]' '[:lower:]')"
+UNAME_M="$(uname -m)"
+case "$UNAME_S" in
+    linux*)
+        if [ -n "${TERMUX_VERSION:-}" ] || [ -d /data/data/com.termux ]; then
+            OS="termux"
+        else
+            OS="linux"
+        fi
+        ;;
+    darwin*)  OS="darwin" ;;
+    *)        echo "unsupported OS: $UNAME_S" >&2; exit 1 ;;
+esac
+case "$UNAME_M" in
+    x86_64|amd64)   ARCH="x64" ;;
+    aarch64|arm64)  ARCH="aarch64" ;;
+    *)              echo "unsupported arch: $UNAME_M" >&2; exit 1 ;;
 esac
 
-if is_termux; then
-  case "$ARCH" in
-    aarch64|arm64)  ASSET="flippy-linux-arm64" ; PLATFORM="Termux ARM64" ;;
-    x86_64|amd64)   ASSET="flippy-linux-x64"   ; PLATFORM="Termux x64" ;;
-  esac
-fi
+ASSET="trupx-${OS}-${ARCH}"
+URL="${SERVER}/${ASSET}"
 
-echo "flippy installer"
-echo "  platform    : $PLATFORM"
-echo "  install dir : $INSTALL_DIR"
-
-if [ -z "$ASSET" ]; then
-  echo >&2
-  echo "Error: no prebuilt binary for $OS/$ARCH." >&2
-  echo "Contact support via $BASE_URL" >&2
-  exit 1
-fi
+echo
+echo "  Installing trupx -> ${EXE}"
+echo "  Platform:         ${OS}/${ARCH}"
+echo
 
 mkdir -p "$INSTALL_DIR"
 
-# ----- download -----
-URL="$BIN_BASE/$ASSET"
-echo
-echo "Downloading $URL ..."
 if command -v curl >/dev/null 2>&1; then
-  curl -fSL --progress-bar "$URL" -o "$BIN"
+    DL="curl -fsSL -o $EXE $URL"
 elif command -v wget >/dev/null 2>&1; then
-  wget -q --show-progress -O "$BIN" "$URL"
+    DL="wget -q -O $EXE $URL"
 else
-  echo "Error: need curl or wget." >&2
-  exit 1
-fi
-chmod +x "$BIN"
-echo "  saved $BIN"
-
-# ----- PATH setup -----
-# We write to every shell startup file we know of. On fresh installs (Termux
-# especially) these files don't exist yet, so we create them. Login shells on
-# Termux read .bash_profile OR .profile (first match); interactive bash reads
-# .bashrc; zsh reads .zshenv unconditionally. Covering all four means a new
-# terminal always picks up PATH no matter which shell / login mode is used.
-PATH_LINE='export PATH="$HOME/.flippy/bin:$PATH"'
-ALWAYS_CREATE="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile"
-MAYBE_ZSH="$HOME/.zshrc $HOME/.zshenv"
-
-add_path_line() {
-  rc="$1"
-  if [ ! -f "$rc" ]; then
-    touch "$rc" || return 0
-  fi
-  if ! grep -Fqs "$PATH_LINE" "$rc" 2>/dev/null; then
-    printf '\n# flippy\n%s\n' "$PATH_LINE" >> "$rc"
-    echo "  added PATH to $rc"
-  fi
-}
-
-for rc in $ALWAYS_CREATE; do add_path_line "$rc"; done
-# Only touch zsh files if the user actually has zsh installed OR a file exists.
-if command -v zsh >/dev/null 2>&1 || [ -f "$HOME/.zshrc" ] || [ -f "$HOME/.zshenv" ]; then
-  for rc in $MAYBE_ZSH; do add_path_line "$rc"; done
+    echo "ERROR: curl or wget required" >&2
+    exit 1
 fi
 
-# Make sure .bash_profile actually sources .bashrc on login shells (Termux's
-# default), so the PATH we just added is visible in every new terminal.
-if ! grep -Fqs 'flippy: source .bashrc' "$HOME/.bash_profile" 2>/dev/null; then
-  cat >> "$HOME/.bash_profile" <<'EOF'
-
-# flippy: source .bashrc from login shells (Termux default)
-[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
-EOF
+if ! $DL; then
+    echo
+    echo "  Download failed from $URL"
+    echo "  (A prebuilt binary for ${OS}/${ARCH} isn't published yet.)"
+    echo "  Build from source instead:"
+    echo "    git clone https://github.com/kevilevi07/trupx.git"
+    echo "    cd trupx"
+    case "$OS" in
+        termux) echo "    pkg install rust clang" ;;
+        linux)  echo "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" ;;
+        darwin) echo "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" ;;
+    esac
+    echo "    ./build.sh"
+    exit 1
 fi
 
-# Make it work in THIS invocation.
+chmod +x "$EXE"
+
+# Add to PATH in the user's shell rc.
+RC=""
+case "$(basename "${SHELL:-}")" in
+    bash) RC="${HOME}/.bashrc" ;;
+    zsh)  RC="${HOME}/.zshrc" ;;
+    *)    RC="${HOME}/.profile" ;;
+esac
+LINE='export PATH="$HOME/.trupx/bin:$PATH"'
+if [ -f "$RC" ] && ! grep -qxF "$LINE" "$RC" 2>/dev/null; then
+    echo "$LINE" >> "$RC"
+    echo "  Added trupx to \$PATH in $RC  (re-source it or open a new shell)."
+elif [ ! -f "$RC" ]; then
+    echo "$LINE" > "$RC"
+fi
+
 export PATH="$INSTALL_DIR:$PATH"
-"$BIN" --version || true
 
-# ----- interactive login -----
-# Precedence: positional arg > $FLIPPY_TOKEN > interactive prompt.
-TOKEN="${1:-${FLIPPY_TOKEN:-}}"
-if [ -z "$TOKEN" ] && [ -r /dev/tty ]; then
-  echo
-  echo "Get your token at $BASE_URL/dashboard  (sign up if you don't have one)."
-  printf "Paste your flippy token (or press Enter to skip): "
-  IFS= read -r TOKEN < /dev/tty || TOKEN=""
-fi
-TOKEN="$(printf '%s' "${TOKEN:-}" | tr -d '[:space:]')"
 if [ -n "$TOKEN" ]; then
-  "$BIN" --server "$BASE_URL" login --token "$TOKEN" || echo "login failed; try: flippy --server $BASE_URL login"
+    "$EXE" --server "$SERVER" login --token "$TOKEN"
+    echo
+    echo "  Logged in. Try:"
+    echo "    trupx start myapp"
 else
-  echo "Skipped. Log in later with:"
-  echo "  flippy --server $BASE_URL login"
+    echo
+    echo "  Installed. Log in with:"
+    echo "    trupx --server $SERVER login --token <YOUR_TOKEN>"
+    echo "  Then start a tunnel:"
+    echo "    trupx start myapp"
 fi
-
-cat <<EOF
-
-Installed.
-
-To use flippy in THIS shell now:
-  export PATH="\$HOME/.flippy/bin:\$PATH"
-
-Or open a new terminal. Then:
-  flippy http <port> --name <app-name>
-EOF
+echo

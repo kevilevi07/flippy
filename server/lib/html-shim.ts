@@ -17,7 +17,7 @@
 //     inject it as the first child of <head>.
 
 export function htmlShim(tunnelName: string): string {
-  const prefix = `/t/${tunnelName}`;
+  const prefix = `/${tunnelName}`;
   // Inline JSON-encoded string so quoting is safe.
   const p = JSON.stringify(prefix);
   const js = `
@@ -77,7 +77,7 @@ export function htmlShim(tunnelName: string): string {
     return orig.xhrOpen.apply(this, arguments);
   };
   // Also patch the WebSocket constructor so terminal connections to "/ws"
-  // actually land on "/t/<name>/ws" on the gateway.
+  // actually land on "/<name>/ws" on the gateway.
   var origWS = window.WebSocket;
   if (origWS) {
     function PatchedWS(url, protocols){
@@ -105,7 +105,7 @@ export function htmlShim(tunnelName: string): string {
     window.WebSocket = PatchedWS;
   }
 })();`.trim();
-  return `<script data-flippy-shim>${js}</script>`;
+  return `<script data-trupx-shim>${js}</script>`;
 }
 
 /**

@@ -162,8 +162,12 @@ export const sets = {
   },
 };
 
-// Polling cadence for subscriptions. 100 ms balances latency vs query load.
-const POLL_INTERVAL_MS = 100;
+// Fast idle poll (when we've been quiet for a while) and burst poll (when a
+// message just arrived — likely more are on the way for the same channel,
+// e.g. a stream of PTY output chunks).
+const IDLE_POLL_MS = 50;
+const BURST_POLL_MS = 10;
+const BURST_WINDOW_MS = 400;
 // Drop messages older than this to keep the queue tiny.
 const MSG_TTL_SECONDS = 60;
 
@@ -197,6 +201,7 @@ export const pubsub = {
     let lastId = BigInt(r.rows[0]?.max_id ?? "0");
     let stopped = false;
 
+    let lastHit = 0;
     const loop = async () => {
       while (!stopped) {
         try {
@@ -207,13 +212,21 @@ export const pubsub = {
              LIMIT 200`,
             [channel, lastId.toString()],
           );
-          for (const row of batch.rows) {
-            lastId = BigInt(row.id);
-            try { handler(row.payload); } catch { /* swallow */ }
+          if (batch.rows.length > 0) {
+            lastHit = Date.now();
+            for (const row of batch.rows) {
+              lastId = BigInt(row.id);
+              try { handler(row.payload); } catch { /* swallow */ }
+            }
           }
         } catch { /* keep polling on transient errors */ }
         if (stopped) break;
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        // Burst mode: if we had a hit recently, poll aggressively so
+        // multi-chunk streams (PTY output, body bytes) flush fast.
+        const burst = Date.now() - lastHit < BURST_WINDOW_MS;
+        await new Promise((r) =>
+          setTimeout(r, burst ? BURST_POLL_MS : IDLE_POLL_MS),
+        );
       }
     };
     void loop();

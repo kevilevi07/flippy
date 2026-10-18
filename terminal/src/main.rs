@@ -11,7 +11,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "flippy", version, about = "Flippy - web terminal with built-in self-hosted tunnel")]
+#[command(name = "trupx", version, about = "Trupx - web terminal with built-in self-hosted tunnel")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
@@ -46,12 +46,12 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Cmd {
     /// Start the local terminal AND open a tunnel with the given name.
-    /// Equivalent to `flippy --tunnel --name <NAME>`.
+    /// Equivalent to `trupx --tunnel --name <NAME>`.
     Start {
         /// Tunnel app name (3-32 chars, a-z 0-9 and -).
         name: Option<String>,
     },
-    /// Stop a running flippy instance.
+    /// Stop a running trupx instance.
     Stop,
     /// Show daemon + tunnel status.
     Status,
@@ -95,7 +95,7 @@ fn main() {
     if !is_daemon {
         if let Some(pid) = terminal::is_running() {
             eprintln!(
-                "flippy is already running (pid {}). Use `flippy stop` to stop it first.",
+                "trupx is already running (pid {}). Use `trupx stop` to stop it first.",
                 pid
             );
             std::process::exit(1);
@@ -122,7 +122,7 @@ fn main() {
     let tunnel_name = cli.tunnel_name.clone();
     let tunnel_server = cli.tunnel_server.clone();
 
-    // Write pid file so `flippy stop` can find us.
+    // Write pid file so `trupx stop` can find us.
     let _ = fs::write(terminal::pid_file(), std::process::id().to_string());
     terminal::append_log(&format!(
         "start pid={} port={} user={} tunnel={}",
@@ -148,7 +148,7 @@ fn main() {
         #[cfg(not(windows))]
         {
             println!();
-            println!("  Flippy is running on http://localhost:{}", port);
+            println!("  Trupx is running on http://localhost:{}", port);
             println!("  Shell:       {}", banner_shell);
             println!("  Credential:  {} / ********", banner_user);
             if tunnel {
@@ -176,7 +176,7 @@ fn main() {
             }
             if cfg.server.is_none() || cfg.token.is_none() {
                 eprintln!(
-                    "tunnel: not configured. Run `flippy login --token <fly_...>` first."
+                    "tunnel: not configured. Run `trupx login --token <fly_...>` first."
                 );
                 None
             } else {
@@ -209,8 +209,8 @@ fn cmd_stop() -> i32 {
     let (killed, pid) = terminal::kill_running();
     terminal::append_log(&format!("stop requested, pid={:?}, killed={}", pid, killed));
     match (killed, pid) {
-        (true, Some(p)) => println!("flippy stopped (pid {}).", p),
-        _ => println!("flippy was not running; cleaned up any stale pid file."),
+        (true, Some(p)) => println!("trupx stopped (pid {}).", p),
+        _ => println!("trupx was not running; cleaned up any stale pid file."),
     }
     0
 }
@@ -318,15 +318,15 @@ fn detach_and_exit(cli: &Cli) -> ! {
     cmd.stderr(std::process::Stdio::null());
     match cmd.spawn() {
         Ok(child) => {
-            println!("flippy started in background (pid {}).", child.id());
+            println!("trupx started in background (pid {}).", child.id());
             if cli.tunnel {
-                println!("tunnel: see https://<your-flippy-server>/dashboard for the public URL");
+                println!("tunnel: see https://<your-trupx-server>/dashboard for the public URL");
             }
             let _ = std::io::stdout().flush();
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("failed to launch background flippy: {}", e);
+            eprintln!("failed to launch background trupx: {}", e);
             std::process::exit(1);
         }
     }
