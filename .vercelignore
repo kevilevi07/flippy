@@ -1,0 +1,10 @@
+terminal/
+public/
+dist/
+*.log
+build.bat
+build.sh
+.git/
+server/node_modules/
+server/.next/
+server/.vercel/

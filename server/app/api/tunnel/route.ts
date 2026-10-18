@@ -3,14 +3,14 @@
 // Auth: single `CLI_TOKEN` env var — set when you deploy. The CLI sends it
 // as `Authorization: Bearer <token>`. One token = one admin = you.
 //
-// Everything flows through the in-process pub/sub bus (lib/store.ts) since
-// Fly.io runs one long-lived container.
+// Cross-instance state (tunnel registry + request/response bridging) lives
+// in Vercel Marketplace Postgres (Neon), via lib/db.ts.
 
 import { upgradeWebSocket } from "@vercel/functions";
 import type { WebSocket } from "ws";
 import type { Frame } from "@/lib/proto";
 import { newId } from "@/lib/proto";
-import { keys, kv, pubsub, TUNNEL_TTL_SECONDS } from "@/lib/store";
+import { keys, kv, pubsub, TUNNEL_TTL_SECONDS } from "@/lib/db";
 import { isValidName } from "@/lib/names";
 import { timingSafeEqual } from "node:crypto";
 

@@ -1,15 +1,15 @@
 # Flippy
 
-**A web terminal, reachable from anywhere via your own Fly.io app.**
+**A web terminal, reachable from anywhere via your own Vercel app.**
 
 - `flippy` opens a live browser terminal on your machine (ttyd-style)
-- `flippy --tunnel` exposes that terminal to the world through *your* Fly.io app
+- `flippy --tunnel` exposes that terminal to the world through *your* Vercel app
 - **One ~3 MB native binary.** Windows, Linux, macOS, Termux (Android).
-- **No database.** No credit card. State lives in the server process.
+- Uses Vercel's built-in **Neon Postgres** (free tier via Marketplace, no card).
 
 ```
 ┌──────────────┐    outbound WS    ┌──────────────────┐    HTTPS/WSS   ┌─────────┐
-│ flippy.exe   │ ────────────────▶ │  Fly.io app      │ ◀───────────── │ browser │
+│ flippy.exe   │ ────────────────▶ │  Vercel app      │ ◀───────────── │ browser │
 │ (your PC)    │ ◀──────────────── │  (your account)  │                │ anywhere│
 └──────────────┘   HTTP + WS proxy └──────────────────┘                └─────────┘
 ```
@@ -29,14 +29,13 @@ flippy/
 │     ├─ proto.rs     — wire protocol (shared with server/lib/proto.ts)
 │     ├─ login.rs
 │     └─ config.rs
-├─ server/        ← Next.js app deployed to Fly.io
+├─ server/        ← Next.js app deployed to Vercel
 │  ├─ app/
 │  │  ├─ page.tsx                 ← landing page
 │  │  ├─ api/tunnel/              ← CLI's WS endpoint (bearer token)
 │  │  └─ t/[tid]/[[...path]]/     ← public catch-all (HTTP + WS proxy)
-│  ├─ lib/           — store.ts (in-memory), proto.ts, html-shim, names
-│  ├─ Dockerfile
-│  ├─ fly.toml
+│  ├─ lib/           — db.ts (Neon-backed), proto.ts, html-shim, names
+│  ├─ vercel.ts
 │  ├─ next.config.ts
 │  └─ package.json
 ├─ public/
@@ -79,52 +78,55 @@ Open **http://localhost:8090** in a browser. Keyboard: **select = copy, double-c
 
 ---
 
-## Deploy the server to Fly.io
+## Deploy the server to Vercel
 
-### 1. Install flyctl
+### 1. Install Vercel CLI
 
 ```sh
-# macOS / Linux / Termux
-curl -L https://fly.io/install.sh | sh
-
-# Windows (PowerShell)
-iwr https://fly.io/install.ps1 -useb | iex
+npm i -g vercel
 ```
 
-### 2. Sign up and launch
+### 2. Create the project
 
 ```sh
 cd server
-fly auth signup           # browser opens; signup is free, no card
-fly launch --name flippy  # pick region, accept the Dockerfile detected
+vercel link           # create project `flippy` under your account
 ```
 
-### 3. Set the CLI token
-
-Pick any long random string (treat as a password):
+### 3. Add Neon Postgres (free tier)
 
 ```sh
-fly secrets set CLI_TOKEN="<pick-a-long-random-string>"
+vercel integration add neon
 ```
 
-### 4. Deploy
+Click through the browser flow → pick **Free** → done. Vercel sets `DATABASE_URL`
+automatically on the project.
+
+### 4. Set the CLI token
 
 ```sh
-fly deploy
+vercel env add CLI_TOKEN production
+# paste a long random string when prompted (treat as a password)
 ```
 
-Fly.io prints your production URL — something like `https://flippy.fly.dev`.
+### 5. Deploy
+
+```sh
+vercel deploy --prod
+```
+
+Vercel prints your production URL — something like `https://flippy-abc.vercel.app`.
 
 ---
 
-## Run — worldwide via your Fly.io app
+## Run — worldwide via your Vercel app
 
 ```cmd
-flippy login --server https://flippy.fly.dev --token <same CLI_TOKEN>
+flippy login --server https://flippy-abc.vercel.app --token <same CLI_TOKEN>
 flippy --tunnel --name myterm
 ```
 
-Open **https://flippy.fly.dev/t/myterm/** from any phone or laptop → login screen → `admin / @dmin1.@` → your shell.
+Open **https://flippy-abc.vercel.app/t/myterm/** from any phone or laptop → login screen → `admin / @dmin1.@` → your shell.
 
 ---
 
@@ -160,11 +162,11 @@ flippy logout             # clear token
 ## Tech
 
 - **CLI**: Rust 2021 · `axum` 0.7 · `portable-pty` 0.8 · `tokio-tungstenite` · `reqwest` (rustls) · `rust-embed` · `clap` · `hickory-resolver` (DoH fallback for Termux)
-- **Server**: Next.js 15 App Router · `@vercel/functions` `upgradeWebSocket` · in-memory `Map` + `EventEmitter` (no database)
-- **Deploy**: Fly.io — single always-on 256 MB container, free tier
+- **Server**: Next.js 15 App Router · `@vercel/functions` `upgradeWebSocket` · `@neondatabase/serverless` with Postgres `LISTEN/NOTIFY` for pub/sub
+- **Deploy**: Vercel + Vercel Marketplace Neon Postgres (free tier)
 
 ## Limitations
 
-- Flashes a reconnect only when the Fly.io machine restarts (deploys, scale events) — otherwise the WS connection stays stable; no 300 s cap like Vercel.
+- WebSocket session capped by Vercel Function duration (Hobby: 300s). The CLI reconnects with the same tunnel id automatically; the browser's WS reconnects transparently. The underlying shell survives.
+- Request/response body cap: 4.5 MB (Vercel platform limit).
 - HTTP(S) + WebSocket only; no raw TCP (SSH, Postgres, etc.) over the tunnel.
-- Server is single-instance by default. Scale by running your own cluster, but you'd then need shared state (Redis / Postgres).
