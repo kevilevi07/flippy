@@ -69,7 +69,9 @@ fn main() {
     match &cli.command {
         Some(Cmd::Stop) => std::process::exit(cmd_stop()),
         Some(Cmd::Status) => std::process::exit(cmd_status()),
-        Some(Cmd::Login { token }) => std::process::exit(cmd_login(token.clone())),
+        Some(Cmd::Login { token }) => {
+            std::process::exit(cmd_login(token.clone(), cli.tunnel_server.clone()))
+        }
         Some(Cmd::Logout) => std::process::exit(cmd_logout()),
         Some(Cmd::Daemon) | None => {}
     }
@@ -222,7 +224,7 @@ fn cmd_status() -> i32 {
     0
 }
 
-fn cmd_login(token: Option<String>) -> i32 {
+fn cmd_login(token: Option<String>, server_override: Option<String>) -> i32 {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -234,6 +236,9 @@ fn cmd_login(token: Option<String>) -> i32 {
             return 1;
         }
     };
+    if let Some(s) = server_override {
+        cfg.server = Some(s.trim().trim_end_matches('/').to_string());
+    }
     match rt.block_on(login::run(&mut cfg, token)) {
         Ok(()) => 0,
         Err(e) => {

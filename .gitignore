@@ -33,3 +33,6 @@ server/public/flippy-windows-*
 .agents/
 .claude/
 skills-lock.json
+
+.vercel
+.env*

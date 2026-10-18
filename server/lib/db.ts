@@ -11,7 +11,8 @@ if (typeof WebSocket === "undefined") {
   neonConfig.webSocketConstructor = ws as any;
 }
 
-function url(): string {
+// Pool is used for one-shot queries; it may ride Neon's connection pooler.
+function pooledUrl(): string {
   const u =
     process.env.DATABASE_URL ??
     process.env.POSTGRES_URL ??
@@ -20,9 +21,23 @@ function url(): string {
   return u;
 }
 
+// Dedicated Client is used for LISTEN; MUST bypass the pooler because
+// LISTEN/NOTIFY requires a stable session which pgBouncer-style poolers
+// break.
+function unpooledUrl(): string {
+  const u =
+    process.env.DATABASE_URL_UNPOOLED ??
+    process.env.POSTGRES_URL_NON_POOLING ??
+    process.env.POSTGRES_URL_NO_SSL ??
+    process.env.DATABASE_URL ??
+    process.env.POSTGRES_URL;
+  if (!u) throw new Error("DATABASE_URL / POSTGRES_URL is not set");
+  return u;
+}
+
 let _pool: Pool | null = null;
 function pool(): Pool {
-  if (!_pool) _pool = new Pool({ connectionString: url() });
+  if (!_pool) _pool = new Pool({ connectionString: pooledUrl() });
   return _pool;
 }
 
@@ -149,7 +164,7 @@ export const pubsub = {
     handler: (payload: string) => void,
   ): Promise<() => Promise<void>> {
     await ensureSchema();
-    const client = new Client({ connectionString: url() });
+    const client = new Client({ connectionString: unpooledUrl() });
     await client.connect();
     const chan = pgChannel(channel);
     client.on("notification", (msg) => {
