@@ -37,7 +37,9 @@ try {
 }
 
 # Persist to the user's PATH so every NEW terminal picks it up.
-# `setx` writes to HKCU\Environment; it's the standard CLM-safe method.
+# Write the HKCU\Environment PATH directly — more reliable than `setx` in
+# Constrained Language Mode. The explorer broadcast happens on next logon
+# (or you can just open a new terminal immediately).
 $UserPath = ''
 try {
     $UserPath = Get-ItemProperty -Path 'HKCU:\Environment' -Name PATH -ErrorAction Stop |
@@ -47,11 +49,32 @@ try {
 }
 if ($UserPath -notlike "*$InstallDir*") {
     $NewPath = if ($UserPath) { "$UserPath;$InstallDir" } else { $InstallDir }
-    & setx PATH "$NewPath" | Out-Null
-    Write-Host "  Added $InstallDir to your user PATH."
+    try {
+        Set-ItemProperty -Path 'HKCU:\Environment' -Name PATH -Value $NewPath -Force
+        Write-Host "  Added $InstallDir to your user PATH (registry: HKCU\Environment\PATH)."
+    } catch {
+        # Belt-and-suspenders fallback.
+        & setx PATH "$NewPath" | Out-Null
+        Write-Host "  Added $InstallDir to your user PATH (via setx)."
+    }
     Write-Host "  Open a NEW terminal to use ``trupx`` from anywhere."
 } else {
     Write-Host "  Install dir already on PATH."
+}
+
+# Also write a tiny .cmd shim to a universally-on-PATH location.
+# C:\Users\<user>\AppData\Local\Microsoft\WindowsApps is on PATH by default
+# on all Windows 10+ installs, so this works in every terminal immediately.
+$WinAppsDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+if (Test-Path $WinAppsDir) {
+    $Shim = Join-Path $WinAppsDir 'trupx.cmd'
+    $ShimBody = "@echo off`r`n`"$ExePath`" %*`r`n"
+    try {
+        Set-Content -Path $Shim -Value $ShimBody -Encoding ASCII -Force
+        Write-Host "  Shim installed at $Shim (immediate PATH access)."
+    } catch {
+        # Non-fatal; registry update still gives new terminals access.
+    }
 }
 
 # Make `trupx` work in THIS session right away too.

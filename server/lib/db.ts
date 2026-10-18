@@ -163,24 +163,28 @@ export const sets = {
 };
 
 // Fast idle poll (when we've been quiet for a while) and burst poll (when a
-// message just arrived — likely more are on the way for the same channel,
-// e.g. a stream of PTY output chunks).
-const IDLE_POLL_MS = 50;
-const BURST_POLL_MS = 10;
-const BURST_WINDOW_MS = 400;
+// message just arrived — likely more are on the way for the same channel).
+const IDLE_POLL_MS = 25;
+const BURST_POLL_MS = 5;
+const BURST_WINDOW_MS = 800;
 // Drop messages older than this to keep the queue tiny.
 const MSG_TTL_SECONDS = 60;
 
 export const pubsub = {
   async publish(channel: string, payload: string): Promise<void> {
+    // Hot path: single INSERT, no extra queries. Cleanup runs out-of-band.
     await q(
       `INSERT INTO msg_queue(chan, payload) VALUES ($1, $2)`,
       [channel, payload],
     );
-    // Opportunistic cleanup of expired rows (best-effort).
-    pool()
-      .query(`DELETE FROM msg_queue WHERE created_at < now() - interval '${MSG_TTL_SECONDS} seconds'`)
-      .catch(() => {});
+  },
+
+  async sweep(): Promise<void> {
+    try {
+      await pool().query(
+        `DELETE FROM msg_queue WHERE created_at < now() - interval '${MSG_TTL_SECONDS} seconds'`,
+      );
+    } catch { /* ignore */ }
   },
 
   /**
