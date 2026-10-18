@@ -1,9 +1,11 @@
 // Postgres-backed kv/sets/pub-sub, same shape as the in-memory store.
 // Backed by Vercel's Marketplace Neon Postgres (free tier, no card).
-// Pub/sub uses `LISTEN`/`NOTIFY` on a dedicated long-lived Client so it
-// works across different Vercel Function instances.
+//
+// Pub/sub is implemented as polling of a `msg_queue` table rather than
+// LISTEN/NOTIFY. This is slower (adds ~100 ms of polling latency) but is
+// fully reliable across Vercel Function instances and Neon pooling modes.
 
-import { Client, Pool, neonConfig } from "@neondatabase/serverless";
+import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 
 if (typeof WebSocket === "undefined") {
@@ -37,7 +39,8 @@ function unpooledUrl(): string {
 
 let _pool: Pool | null = null;
 function pool(): Pool {
-  if (!_pool) _pool = new Pool({ connectionString: pooledUrl() });
+  // Use the unpooled URL so pg_notify() isn't dropped by pgBouncer.
+  if (!_pool) _pool = new Pool({ connectionString: unpooledUrl() });
   return _pool;
 }
 
@@ -63,6 +66,17 @@ async function ensureSchema(): Promise<void> {
           PRIMARY KEY (k, member)
         );
       `);
+      await p.query(`
+        CREATE TABLE IF NOT EXISTS msg_queue (
+          id          BIGSERIAL PRIMARY KEY,
+          chan        TEXT NOT NULL,
+          payload     TEXT NOT NULL,
+          created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+      `);
+      await p.query(
+        `CREATE INDEX IF NOT EXISTS msg_queue_chan_idx ON msg_queue(chan, id);`,
+      );
     })().catch((e) => {
       _schemaReady = null;
       throw e;
@@ -148,34 +162,64 @@ export const sets = {
   },
 };
 
-function pgChannel(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/:/g, "_")
-    .replace(/[^a-z0-9_]/g, "");
-}
+// Polling cadence for subscriptions. 100 ms balances latency vs query load.
+const POLL_INTERVAL_MS = 100;
+// Drop messages older than this to keep the queue tiny.
+const MSG_TTL_SECONDS = 60;
 
 export const pubsub = {
   async publish(channel: string, payload: string): Promise<void> {
-    await q(`SELECT pg_notify($1, $2)`, [pgChannel(channel), payload]);
+    await q(
+      `INSERT INTO msg_queue(chan, payload) VALUES ($1, $2)`,
+      [channel, payload],
+    );
+    // Opportunistic cleanup of expired rows (best-effort).
+    pool()
+      .query(`DELETE FROM msg_queue WHERE created_at < now() - interval '${MSG_TTL_SECONDS} seconds'`)
+      .catch(() => {});
   },
+
+  /**
+   * Subscribe to a channel by polling. Only delivers messages inserted AFTER
+   * subscribe() returns, so callers must subscribe before publishing their
+   * matching outbound frame (same pattern as before).
+   */
   async subscribe(
     channel: string,
     handler: (payload: string) => void,
   ): Promise<() => Promise<void>> {
     await ensureSchema();
-    const client = new Client({ connectionString: unpooledUrl() });
-    await client.connect();
-    const chan = pgChannel(channel);
-    client.on("notification", (msg) => {
-      if (msg.channel === chan && typeof msg.payload === "string") {
-        try { handler(msg.payload); } catch { /* swallow */ }
+    // Watermark: start from the current max id so we never replay old rows.
+    const r = await pool().query<{ max_id: string | null }>(
+      `SELECT COALESCE(MAX(id), 0)::text AS max_id FROM msg_queue WHERE chan = $1`,
+      [channel],
+    );
+    let lastId = BigInt(r.rows[0]?.max_id ?? "0");
+    let stopped = false;
+
+    const loop = async () => {
+      while (!stopped) {
+        try {
+          const batch = await pool().query<{ id: string; payload: string }>(
+            `SELECT id::text, payload FROM msg_queue
+             WHERE chan = $1 AND id > $2
+             ORDER BY id ASC
+             LIMIT 200`,
+            [channel, lastId.toString()],
+          );
+          for (const row of batch.rows) {
+            lastId = BigInt(row.id);
+            try { handler(row.payload); } catch { /* swallow */ }
+          }
+        } catch { /* keep polling on transient errors */ }
+        if (stopped) break;
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
-    });
-    await client.query(`LISTEN "${chan}"`);
+    };
+    void loop();
+
     return async () => {
-      try { await client.query(`UNLISTEN "${chan}"`); } catch { /* ignore */ }
-      try { await client.end(); } catch { /* ignore */ }
+      stopped = true;
     };
   },
 };

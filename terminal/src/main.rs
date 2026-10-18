@@ -45,6 +45,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
+    /// Start the local terminal AND open a tunnel with the given name.
+    /// Equivalent to `flippy --tunnel --name <NAME>`.
+    Start {
+        /// Tunnel app name (3-32 chars, a-z 0-9 and -).
+        name: Option<String>,
+    },
     /// Stop a running flippy instance.
     Stop,
     /// Show daemon + tunnel status.
@@ -62,8 +68,16 @@ enum Cmd {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     let is_daemon = matches!(cli.command, Some(Cmd::Daemon));
+
+    // The `start <name>` subcommand is sugar for `--tunnel --name <name>`.
+    if let Some(Cmd::Start { name }) = &cli.command {
+        let n = name.clone();
+        cli.tunnel = true;
+        if n.is_some() { cli.tunnel_name = n; }
+        cli.command = None;
+    }
 
     // Non-server subcommands run and exit immediately.
     match &cli.command {
@@ -74,6 +88,7 @@ fn main() {
         }
         Some(Cmd::Logout) => std::process::exit(cmd_logout()),
         Some(Cmd::Daemon) | None => {}
+        Some(Cmd::Start { .. }) => unreachable!(),
     }
 
     // Guard against a second instance.
@@ -116,6 +131,7 @@ fn main() {
         user,
         tunnel
     ));
+
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -165,9 +181,13 @@ fn main() {
                 None
             } else {
                 let local_host = "127.0.0.1".to_string();
+                terminal::append_log(&format!(
+                    "tunnel starting: server={} name={:?}",
+                    cfg.server.as_deref().unwrap_or("?"), tunnel_name
+                ));
                 Some(tokio::spawn(async move {
                     if let Err(e) = tunnel::run(&cfg, &local_host, port, tunnel_name).await {
-                        eprintln!("tunnel ended: {}", e);
+                        terminal::append_log(&format!("tunnel ended: {}", e));
                     }
                 }))
             }

@@ -104,7 +104,7 @@ pub async fn run(
                 backoff = Duration::from_millis(500);
             }
             Err(e) => {
-                tracing::warn!(error = ?e, "session ended, will reconnect");
+                crate::terminal::append_log(&format!("tunnel: session ended ({}); reconnecting", e));
             }
         }
         tokio::time::sleep(backoff).await;
@@ -139,7 +139,7 @@ async fn one_session(
         format!("Bearer {token}").parse().expect("valid header"),
     );
 
-    tracing::info!("connecting {}", ws_url);
+    crate::terminal::append_log(&format!("tunnel: connecting {}", ws_url));
     let host = ws_url.host_str().context("ws url has no host")?.to_string();
     let is_tls = ws_url.scheme() == "wss";
     let port = ws_url.port().unwrap_or(if is_tls { 443 } else { 80 });
@@ -203,24 +203,45 @@ async fn one_session(
                         let frame = Frame::decode(&txt).context("decoding frame")?;
                         match frame {
                             Frame::Ready { tunnel_id, public_url } => {
+                                crate::terminal::append_log(&format!(
+                                    "tunnel READY: {} -> http://{}:{}",
+                                    public_url, local_host, local_port
+                                ));
                                 println!("Forwarding {public_url}  ->  http://{local_host}:{local_port}");
                                 assigned = Some(tunnel_id);
                             }
                             Frame::Request { req_id, method, path, headers, body_b64 } => {
+                                crate::terminal::append_log(&format!(
+                                    "tunnel REQUEST: {} {} (req_id={})", method, path, req_id
+                                ));
                                 let out_tx = out_tx.clone();
                                 let http = http.clone();
                                 let host = local_host.to_string();
                                 tokio::spawn(async move {
                                     let reply = match forward(&http, &host, local_port, &method, &path, &headers, &body_b64).await {
-                                        Ok((status, headers, body)) => Frame::Response {
-                                            req_id: req_id.clone(),
-                                            status,
-                                            headers,
-                                            body_b64: B64.encode(&body),
-                                        },
-                                        Err(e) => Frame::Error { req_id: req_id.clone(), message: e.to_string() },
+                                        Ok((status, headers, body)) => {
+                                            crate::terminal::append_log(&format!(
+                                                "tunnel RESPONSE: {} ({} bytes) req_id={}", status, body.len(), req_id
+                                            ));
+                                            Frame::Response {
+                                                req_id: req_id.clone(),
+                                                status,
+                                                headers,
+                                                body_b64: B64.encode(&body),
+                                            }
+                                        }
+                                        Err(e) => {
+                                            crate::terminal::append_log(&format!(
+                                                "tunnel FORWARD ERROR: req_id={} err={}", req_id, e
+                                            ));
+                                            Frame::Error { req_id: req_id.clone(), message: e.to_string() }
+                                        }
                                     };
-                                    let _ = out_tx.send(Message::Text(reply.encode())).await;
+                                    if let Err(e) = out_tx.send(Message::Text(reply.encode())).await {
+                                        crate::terminal::append_log(&format!(
+                                            "tunnel SEND-REPLY FAILED: req_id={} err={}", req_id, e
+                                        ));
+                                    }
                                 });
                             }
                             Frame::WsOpen { req_id, path, headers } => {
