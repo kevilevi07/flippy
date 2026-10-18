@@ -1,23 +1,25 @@
 // WebSocket endpoint that holds a persistent connection from the Rust CLI.
 //
 // Protocol:
-//   1. CLI connects with `Authorization: Bearer <vercel-token>`.
-//   2. We validate the token against Vercel's API -> user id.
-//   3. Mint (or reuse via ?tid=) a tunnel id. Store {tid -> user_id} in Redis.
-//   4. Subscribe to `req:<tid>`. Each pub/sub message is an HTTP request that
-//      arrived on the public catch-all route; serialize it to the WS as a
-//      `request` frame.
-//   5. When CLI sends `response`/`error`, publish on `resp:<tid>:<req_id>`.
+//   1. CLI connects with `Authorization: Bearer <fly_...>`.
+//   2. We validate the token against our DB -> user id.
+//   3. Mint (or reuse via ?name=) a tunnel id. Store {tid -> user_id} in kv.
+//   4. Subscribe to `req:<tid>` via Postgres LISTEN. Each notification is an
+//      HTTP request or WsOpen that arrived on the public catch-all route;
+//      forward to the CLI as a Frame.
+//   5. When CLI sends `response`/`error`/`ws_frame`/`ws_close`, publish via
+//      pg_notify back to the gateway.
 //   6. Refresh tunnel TTL on each ping.
 
 import { upgradeWebSocket } from "@vercel/functions";
 import type { WebSocket } from "ws";
 import type { Frame } from "@/lib/proto";
 import { newId } from "@/lib/proto";
-import { keys, redis, subscriber, TUNNEL_TTL_SECONDS } from "@/lib/redis";
+import { keys, kv, pubsub, sets, TUNNEL_TTL_SECONDS } from "@/lib/db";
 import { userIdFromToken } from "@/lib/auth";
 import { isValidName } from "@/lib/names";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request): Promise<Response> {
@@ -40,7 +42,7 @@ export async function GET(req: Request): Promise<Response> {
         { status: 400 },
       );
     }
-    const existing = await redis().get(keys.tunnel(requested));
+    const existing = await kv.get(keys.tunnel(requested));
     if (existing) {
       try {
         const rec = JSON.parse(existing) as { user_id: string };
@@ -66,17 +68,15 @@ export async function GET(req: Request): Promise<Response> {
     await claimTunnel(tid, userId);
     sendFrame(ws, { type: "ready", tunnel_id: tid, public_url: publicUrl });
 
-    const sub = subscriber().duplicate();
-    await sub.subscribe(keys.reqChan(tid));
-    sub.on("message", (_chan, payload) => {
+    const closeSub = await pubsub.subscribe(keys.reqChan(tid), (payload) => {
       try {
         const frame = JSON.parse(payload) as Frame;
         sendFrame(ws, frame);
-      } catch { /* ignore */ }
+      } catch { /* ignore malformed */ }
     });
 
     const ttlTimer: NodeJS.Timeout = setInterval(() => {
-      void redis().expire(keys.tunnel(tid), TUNNEL_TTL_SECONDS);
+      void kv.expire(keys.tunnel(tid), TUNNEL_TTL_SECONDS);
     }, 30_000);
 
     ws.on("message", async (data) => {
@@ -95,40 +95,38 @@ export async function GET(req: Request): Promise<Response> {
       switch (frame.type) {
         case "ping":
           sendFrame(ws, { type: "pong" });
-          await redis().expire(keys.tunnel(tid), TUNNEL_TTL_SECONDS);
+          await kv.expire(keys.tunnel(tid), TUNNEL_TTL_SECONDS);
           return;
         case "pong":
           return;
         case "response":
         case "error":
-          await redis().publish(
+          await pubsub.publish(
             keys.respChan(tid, frame.req_id),
             JSON.stringify(frame),
           );
           return;
         case "ws_frame":
         case "ws_close":
-          // Stream back to the public gateway holding the browser's WebSocket.
-          await redis().publish(keys.wsChan(tid, frame.req_id), JSON.stringify(frame));
+          await pubsub.publish(keys.wsChan(tid, frame.req_id), JSON.stringify(frame));
           return;
         default:
           return;
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", async () => {
       clearInterval(ttlTimer);
-      void sub.quit().catch(() => {});
-      // Tunnel key expires via TTL; a reconnect with ?tid= resumes it.
+      await closeSub();
+      // Tunnel key expires via TTL; a reconnect with ?name= resumes it.
     });
   });
 }
 
 async function claimTunnel(tid: string, userId: string): Promise<void> {
-  const r = redis();
   const rec = JSON.stringify({ user_id: userId, created_at: Date.now() });
-  await r.setex(keys.tunnel(tid), TUNNEL_TTL_SECONDS, rec);
-  await r.sadd(keys.userTunnels(userId), tid);
+  await kv.set(keys.tunnel(tid), rec, TUNNEL_TTL_SECONDS);
+  await sets.add(keys.userTunnels(userId), tid);
 }
 
 function sendFrame(ws: WebSocket, frame: Frame): void {

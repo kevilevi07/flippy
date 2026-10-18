@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
-import { redis } from "./redis";
+import { kv, sets } from "./db";
 
 const SESSION_COOKIE = "flippy_session";
 const SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
@@ -40,9 +40,8 @@ export function randomToken(bytes = 32): string {
 // ---------- user store ----------
 
 export async function createUser(email: string, password: string): Promise<UserRecord> {
-  const r = redis();
   const emailKey = `email:${email.toLowerCase()}`;
-  const existing = await r.get(emailKey);
+  const existing = await kv.get(emailKey);
   if (existing) throw new Error("email already registered");
 
   const user: UserRecord = {
@@ -52,17 +51,15 @@ export async function createUser(email: string, password: string): Promise<UserR
     flippy_token: `fly_${randomToken(24)}`,
     created_at: Date.now(),
   };
-  const tx = r.multi();
-  tx.set(`user:${user.id}`, JSON.stringify(user));
-  tx.set(emailKey, user.id);
-  tx.setex(`token:${user.flippy_token}`, TOKEN_TTL, user.id);
-  tx.sadd("users", user.id);
-  await tx.exec();
+  await kv.set(`user:${user.id}`, JSON.stringify(user));
+  await kv.set(emailKey, user.id);
+  await kv.set(`token:${user.flippy_token}`, user.id, TOKEN_TTL);
+  await sets.add("users", user.id);
   return user;
 }
 
 export async function listAllUsers(): Promise<UserRecord[]> {
-  const ids = await redis().smembers("users");
+  const ids = await sets.members("users");
   if (ids.length === 0) return [];
   const results: UserRecord[] = [];
   for (const id of ids) {
@@ -74,43 +71,37 @@ export async function listAllUsers(): Promise<UserRecord[]> {
 }
 
 export async function deleteUser(id: string): Promise<boolean> {
-  const r = redis();
   const user = await userById(id);
   if (!user) return false;
-  const tunnelIds: string[] = await r.smembers(`user:${id}:tunnels`);
-  const tx = r.multi();
-  tx.del(`user:${id}`);
-  tx.del(`email:${user.email}`);
-  tx.del(`token:${user.flippy_token}`);
-  tx.del(`user:${id}:tunnels`);
-  for (const t of tunnelIds) tx.del(`tunnel:${t}`);
-  tx.srem("users", id);
-  await tx.exec();
+  const tunnelIds: string[] = await sets.members(`user:${id}:tunnels`);
+  await kv.delete(`user:${id}`);
+  await kv.delete(`email:${user.email}`);
+  await kv.delete(`token:${user.flippy_token}`);
+  await sets.removeKey(`user:${id}:tunnels`);
+  for (const t of tunnelIds) await kv.delete(`tunnel:${t}`);
+  await sets.remove("users", id);
   return true;
 }
 
 export async function resetToken(id: string): Promise<string | null> {
-  const r = redis();
   const user = await userById(id);
   if (!user) return null;
   const newTok = `fly_${randomToken(24)}`;
-  const tx = r.multi();
-  tx.del(`token:${user.flippy_token}`);
+  await kv.delete(`token:${user.flippy_token}`);
   user.flippy_token = newTok;
-  tx.set(`user:${id}`, JSON.stringify(user));
-  tx.setex(`token:${newTok}`, TOKEN_TTL, id);
-  await tx.exec();
+  await kv.set(`user:${id}`, JSON.stringify(user));
+  await kv.set(`token:${newTok}`, id, TOKEN_TTL);
   return newTok;
 }
 
 export async function userByEmail(email: string): Promise<UserRecord | null> {
-  const id = await redis().get(`email:${email.toLowerCase()}`);
+  const id = await kv.get(`email:${email.toLowerCase()}`);
   if (!id) return null;
   return userById(id);
 }
 
 export async function userById(id: string): Promise<UserRecord | null> {
-  const raw = await redis().get(`user:${id}`);
+  const raw = await kv.get(`user:${id}`);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as UserRecord;
@@ -123,26 +114,26 @@ export async function userById(id: string): Promise<UserRecord | null> {
  * Validate a flippy CLI token. Returns the owning user id or null.
  */
 export async function userIdFromToken(token: string): Promise<string | null> {
-  return await redis().get(`token:${token}`);
+  return await kv.get(`token:${token}`);
 }
 
 // ---------- sessions (browser) ----------
 
 export async function createSession(userId: string): Promise<string> {
   const sid = randomToken(32);
-  await redis().setex(`session:${sid}`, SESSION_TTL, userId);
+  await kv.set(`session:${sid}`, userId, SESSION_TTL);
   return sid;
 }
 
 export async function destroySession(sid: string): Promise<void> {
-  await redis().del(`session:${sid}`);
+  await kv.delete(`session:${sid}`);
 }
 
 export async function sessionUserId(): Promise<string | null> {
   const jar = await cookies();
   const sid = jar.get(SESSION_COOKIE)?.value;
   if (!sid) return null;
-  return await redis().get(`session:${sid}`);
+  return await kv.get(`session:${sid}`);
 }
 
 export async function setSessionCookie(sid: string): Promise<void> {

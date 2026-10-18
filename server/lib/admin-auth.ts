@@ -3,7 +3,7 @@
 
 import { cookies } from "next/headers";
 import { timingSafeEqual } from "node:crypto";
-import { redis } from "./redis";
+import { kv } from "./db";
 import { randomToken } from "./auth";
 
 const ADMIN_COOKIE = "flippy_admin";
@@ -36,19 +36,19 @@ export function verifyAdminCredentials(user: string, pass: string): boolean {
 
 export async function createAdminSession(): Promise<string> {
   const sid = randomToken(32);
-  await redis().setex(`admin_session:${sid}`, ADMIN_SESSION_TTL, "1");
+  await kv.set(`admin_session:${sid}`, "1", ADMIN_SESSION_TTL);
   return sid;
 }
 
 export async function destroyAdminSession(sid: string): Promise<void> {
-  await redis().del(`admin_session:${sid}`);
+  await kv.delete(`admin_session:${sid}`);
 }
 
 export async function isAdmin(): Promise<boolean> {
   const jar = await cookies();
   const sid = jar.get(ADMIN_COOKIE)?.value;
   if (!sid) return false;
-  const ok = await redis().get(`admin_session:${sid}`);
+  const ok = await kv.get(`admin_session:${sid}`);
   return ok === "1";
 }
 

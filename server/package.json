@@ -8,8 +8,8 @@
     "start": "next start"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
     "@vercel/functions": "^3.10.1",
-    "ioredis": "^5.4.1",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

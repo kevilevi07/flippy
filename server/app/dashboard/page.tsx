@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { sessionUserId, userById } from "@/lib/auth";
-import { keys, redis } from "@/lib/redis";
+import { keys, kv, sets } from "@/lib/db";
 import CopyRow from "./CopyRow";
 import LogoutButton from "./LogoutButton";
 
@@ -14,15 +14,13 @@ export default async function Dashboard() {
   const user = await userById(uid);
   if (!user) redirect("/login");
 
-  const r = redis();
-  const rawTids = await r.smembers(keys.userTunnels(uid));
+  const rawTids = await sets.members(keys.userTunnels(uid));
   const live: string[] = [];
   for (const t of rawTids) {
-    if ((await r.exists(keys.tunnel(t))) === 1) live.push(t);
+    if (await kv.exists(keys.tunnel(t))) live.push(t);
   }
 
-  const base =
-    (process.env.FLIPPY_PUBLIC_URL ?? "https://flippy.vercel.app").replace(/\/$/, "");
+  const base = (process.env.FLIPPY_PUBLIC_URL ?? "").replace(/\/$/, "");
 
   return (
     <>
@@ -78,8 +76,8 @@ export default async function Dashboard() {
             <ul style={{ paddingLeft: "1.25rem", margin: 0 }}>
               {live.map((t) => (
                 <li key={t} style={{ marginBottom: "0.5rem" }}>
-                  <a href={`${base}/app/${t}`} target="_blank" rel="noreferrer">
-                    {base}/app/{t}
+                  <a href={`${base}/t/${t}`} target="_blank" rel="noreferrer">
+                    {base}/t/{t}
                   </a>
                 </li>
               ))}

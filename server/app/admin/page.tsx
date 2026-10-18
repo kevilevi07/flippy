@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { adminConfigured, isAdmin } from "@/lib/admin-auth";
 import { listAllUsers } from "@/lib/auth";
-import { keys, redis } from "@/lib/redis";
+import { keys, kv, sets } from "@/lib/db";
 import AdminTable from "./AdminTable";
 import AdminLogoutButton from "./AdminLogoutButton";
 
@@ -26,15 +26,14 @@ export default async function AdminHome() {
   }
 
   const users = await listAllUsers();
-  const r = redis();
 
   // Count live tunnels + attach each user's active tunnel ids.
   const augmented = await Promise.all(
     users.map(async (u) => {
-      const ids: string[] = await r.smembers(keys.userTunnels(u.id));
+      const ids: string[] = await sets.members(keys.userTunnels(u.id));
       const live: string[] = [];
       for (const t of ids) {
-        if ((await r.exists(keys.tunnel(t))) === 1) live.push(t);
+        if (await kv.exists(keys.tunnel(t))) live.push(t);
       }
       return { ...u, tunnels: live };
     }),

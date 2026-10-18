@@ -1,5 +1,5 @@
 import { sessionUserId, userById } from "@/lib/auth";
-import { keys, redis } from "@/lib/redis";
+import { keys, kv, sets } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,13 +10,11 @@ export async function GET(): Promise<Response> {
   const user = await userById(uid);
   if (!user) return Response.json({ error: "user missing" }, { status: 401 });
 
-  // List live tunnels for this user. We keep `user:<uid>:tunnels` as a set,
-  // but entries expire via tunnel TTL — filter against actual existence.
-  const tids = await redis().smembers(keys.userTunnels(uid));
+  const tids = await sets.members(keys.userTunnels(uid));
   const alive: string[] = [];
   for (const t of tids) {
-    if ((await redis().exists(keys.tunnel(t))) === 1) alive.push(t);
-    else await redis().srem(keys.userTunnels(uid), t);
+    if (await kv.exists(keys.tunnel(t))) alive.push(t);
+    else await sets.remove(keys.userTunnels(uid), t);
   }
   return Response.json({
     id: user.id,
