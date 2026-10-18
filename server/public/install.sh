@@ -54,16 +54,7 @@ fi
 if ! $DL; then
     echo
     echo "  Download failed from $URL"
-    echo "  (A prebuilt binary for ${OS}/${ARCH} isn't published yet.)"
-    echo "  Build from source instead:"
-    echo "    git clone https://github.com/kevilevi07/trupx.git"
-    echo "    cd trupx"
-    case "$OS" in
-        termux) echo "    pkg install rust clang" ;;
-        linux)  echo "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" ;;
-        darwin) echo "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" ;;
-    esac
-    echo "    ./build.sh"
+    echo
     exit 1
 fi
 
