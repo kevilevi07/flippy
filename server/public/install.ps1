@@ -23,6 +23,27 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 }
 
+# Stop any running trupx so we can overwrite the binary.
+try {
+    Get-Process -Name trupx -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+} catch { }
+
+# If the exe is still locked, rename it aside so the download can proceed.
+if (Test-Path $ExePath) {
+    try {
+        $Stale = "$ExePath.old-$(Get-Random)"
+        Rename-Item -Path $ExePath -NewName (Split-Path $Stale -Leaf) -Force -ErrorAction Stop
+    } catch {
+        Write-Host ""
+        Write-Host "  Cannot replace $ExePath — it's locked by a running process."
+        Write-Host "  Close any program using trupx and re-run the installer."
+        Write-Host ""
+        exit 1
+    }
+}
+
 # Download with up to 3 retries so a transient blip doesn't bail out.
 $Downloaded = $false
 $LastErr    = $null
