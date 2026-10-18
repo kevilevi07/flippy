@@ -1,34 +1,36 @@
 // WebSocket endpoint that holds a persistent connection from the Rust CLI.
 //
-// Protocol:
-//   1. CLI connects with `Authorization: Bearer <fly_...>`.
-//   2. We validate the token against our DB -> user id.
-//   3. Mint (or reuse via ?name=) a tunnel id. Store {tid -> user_id} in kv.
-//   4. Subscribe to `req:<tid>` via Postgres LISTEN. Each notification is an
-//      HTTP request or WsOpen that arrived on the public catch-all route;
-//      forward to the CLI as a Frame.
-//   5. When CLI sends `response`/`error`/`ws_frame`/`ws_close`, publish via
-//      pg_notify back to the gateway.
-//   6. Refresh tunnel TTL on each ping.
+// Auth: single `CLI_TOKEN` env var — set when you deploy. The CLI sends it
+// as `Authorization: Bearer <token>`. One token = one admin = you.
+//
+// Everything flows through the in-process pub/sub bus (lib/store.ts) since
+// Fly.io runs one long-lived container.
 
 import { upgradeWebSocket } from "@vercel/functions";
 import type { WebSocket } from "ws";
 import type { Frame } from "@/lib/proto";
 import { newId } from "@/lib/proto";
-import { keys, kv, pubsub, sets, TUNNEL_TTL_SECONDS } from "@/lib/db";
-import { userIdFromToken } from "@/lib/auth";
+import { keys, kv, pubsub, TUNNEL_TTL_SECONDS } from "@/lib/store";
 import { isValidName } from "@/lib/names";
+import { timingSafeEqual } from "node:crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function tokenOk(provided: string): boolean {
+  const expected = (process.env.CLI_TOKEN ?? "").trim();
+  if (!expected) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export async function GET(req: Request): Promise<Response> {
   const auth = req.headers.get("authorization") ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-  if (!token) return new Response("missing bearer token", { status: 401 });
-
-  const userId = await userIdFromToken(token);
-  if (!userId) return new Response("invalid flippy token", { status: 401 });
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token || !tokenOk(token)) {
+    return new Response("invalid or missing bearer token", { status: 401 });
+  }
 
   const url = new URL(req.url);
   const requested = url.searchParams.get("name") ?? url.searchParams.get("tid");
@@ -42,30 +44,16 @@ export async function GET(req: Request): Promise<Response> {
         { status: 400 },
       );
     }
-    const existing = await kv.get(keys.tunnel(requested));
-    if (existing) {
-      try {
-        const rec = JSON.parse(existing) as { user_id: string };
-        if (rec.user_id !== userId) {
-          return new Response(
-            `app name "${requested}" is in use by another account`,
-            { status: 409 },
-          );
-        }
-      } catch {
-        /* overwrite */
-      }
-    }
     tid = requested;
   } else {
     tid = newId(8);
   }
 
-  const publicBase = (process.env.FLIPPY_PUBLIC_URL ?? url.origin).replace(/\/$/, "");
+  const publicBase = (process.env.PUBLIC_URL ?? url.origin).replace(/\/$/, "");
   const publicUrl = `${publicBase}/t/${tid}`;
 
   return upgradeWebSocket(async (ws: WebSocket) => {
-    await claimTunnel(tid, userId);
+    await kv.set(keys.tunnel(tid), "1", TUNNEL_TTL_SECONDS);
     sendFrame(ws, { type: "ready", tunnel_id: tid, public_url: publicUrl });
 
     const closeSub = await pubsub.subscribe(keys.reqChan(tid), (payload) => {
@@ -118,15 +106,9 @@ export async function GET(req: Request): Promise<Response> {
     ws.on("close", async () => {
       clearInterval(ttlTimer);
       await closeSub();
-      // Tunnel key expires via TTL; a reconnect with ?name= resumes it.
+      await kv.delete(keys.tunnel(tid));
     });
   });
-}
-
-async function claimTunnel(tid: string, userId: string): Promise<void> {
-  const rec = JSON.stringify({ user_id: userId, created_at: Date.now() });
-  await kv.set(keys.tunnel(tid), rec, TUNNEL_TTL_SECONDS);
-  await sets.add(keys.userTunnels(userId), tid);
 }
 
 function sendFrame(ws: WebSocket, frame: Frame): void {

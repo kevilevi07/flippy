@@ -76,6 +76,34 @@ export function htmlShim(tunnelName: string): string {
     arguments[1] = url;
     return orig.xhrOpen.apply(this, arguments);
   };
+  // Also patch the WebSocket constructor so terminal connections to "/ws"
+  // actually land on "/t/<name>/ws" on the gateway.
+  var origWS = window.WebSocket;
+  if (origWS) {
+    function PatchedWS(url, protocols){
+      if (typeof url === "string") {
+        if (url.indexOf("ws://") === 0 || url.indexOf("wss://") === 0) {
+          try {
+            var u = new URL(url);
+            var newPath = add(u.pathname);
+            if (newPath !== u.pathname) {
+              u.pathname = newPath;
+              url = u.toString();
+            }
+          } catch(_) {}
+        } else if (url.indexOf("/") === 0 && url.indexOf("//") !== 0) {
+          url = add(url);
+        }
+      }
+      return protocols === undefined ? new origWS(url) : new origWS(url, protocols);
+    }
+    PatchedWS.prototype = origWS.prototype;
+    PatchedWS.CONNECTING = origWS.CONNECTING;
+    PatchedWS.OPEN       = origWS.OPEN;
+    PatchedWS.CLOSING    = origWS.CLOSING;
+    PatchedWS.CLOSED     = origWS.CLOSED;
+    window.WebSocket = PatchedWS;
+  }
 })();`.trim();
   return `<script data-flippy-shim>${js}</script>`;
 }

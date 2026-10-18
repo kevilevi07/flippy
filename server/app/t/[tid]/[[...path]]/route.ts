@@ -10,7 +10,7 @@ import { upgradeWebSocket } from "@vercel/functions";
 import type { WebSocket as NodeWebSocket } from "ws";
 import type { Frame } from "@/lib/proto";
 import { newId } from "@/lib/proto";
-import { keys, kv, pubsub } from "@/lib/db";
+import { keys, kv, pubsub } from "@/lib/store";
 import { injectShim } from "@/lib/html-shim";
 
 export const runtime = "nodejs";

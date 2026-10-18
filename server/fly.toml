@@ -1,0 +1,26 @@
+# fly.toml — Flippy server on Fly.io
+# App name is set on `fly launch`. Keep this file in server/.
+
+primary_region = "bom"              # Mumbai; change via `fly regions set <code>` after launch
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"        # keep the tunnel alive (don't scale to zero)
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/"
+    protocol = "http"
+    timeout = "5s"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
