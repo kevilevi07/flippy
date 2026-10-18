@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flippy Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: #000; color: #e6e6e6;
+      font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+      overflow: hidden;
+    }
+
+    /* ---------- login screen ---------- */
+    #login-wrap {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: #000;
+      z-index: 10;
+    }
+    .login-card {
+      width: min(380px, 92vw);
+      background: #000;
+      border: 1px solid #1f2430;
+      border-radius: 12px;
+      padding: 32px 28px;
+      box-shadow: 0 0 40px rgba(255, 180, 84, 0.05);
+    }
+    .login-card h1 {
+      margin: 0 0 24px; font-size: 32px; letter-spacing: 3px;
+      color: #ffb454; text-align: center; font-weight: 700;
+    }
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block; font-size: 11px; color: #95a2b3;
+      margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px;
+    }
+    .field input {
+      width: 100%; box-sizing: border-box;
+      padding: 10px 12px; border-radius: 6px;
+      background: #000; color: #e6e6e6;
+      border: 1px solid #1f2430;
+      font-family: inherit; font-size: 14px;
+      outline: none; transition: border-color .15s;
+    }
+    .field input:focus { border-color: #73d0ff; }
+    .login-btn {
+      width: 100%; padding: 11px;
+      background: #ffb454; color: #000;
+      border: none; border-radius: 6px;
+      font-weight: 700; font-size: 14px; cursor: pointer;
+      letter-spacing: 1px; margin-top: 8px;
+      font-family: inherit;
+      transition: filter .15s;
+    }
+    .login-btn:hover { filter: brightness(1.05); }
+    .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .login-err {
+      margin-top: 12px; font-size: 12px; color: #ff6b6b;
+      text-align: center; min-height: 16px;
+    }
+
+    /* ---------- terminal screen ---------- */
+    #app { display: none; height: 100%; flex-direction: column; }
+    #app.active { display: flex; }
+    #header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 16px; height: 36px; box-sizing: border-box;
+      background: #000; border-bottom: 1px solid #1f2430;
+      user-select: none;
+    }
+    #header .brand { font-weight: 700; letter-spacing: 2px; color: #ffb454; }
+    #header .right { display: flex; align-items: center; gap: 12px; }
+    #status { font-size: 12px; color: #95a2b3; }
+    #status.connected { color: #87d96c; }
+    #status.disconnected { color: #ff6b6b; }
+    .icon-btn {
+      background: transparent; color: #95a2b3; border: 1px solid #2d3443;
+      border-radius: 4px; padding: 3px 10px; font-size: 11px; cursor: pointer;
+      font-family: inherit; letter-spacing: 1px;
+    }
+    .icon-btn:hover { color: #73d0ff; border-color: #73d0ff; }
+    .icon-btn.danger:hover { color: #ff6b6b; border-color: #ff6b6b; }
+    #terminal { flex: 1; padding: 6px; box-sizing: border-box; position: relative; background: #000; }
+    #hidden-paste {
+      position: absolute; left: -9999px; top: -9999px;
+      width: 1px; height: 1px; opacity: 0;
+    }
+
+    /* Hide header when in fullscreen */
+    body.fullscreen #header { display: none; }
+    body.fullscreen #terminal { padding: 0; }
+
+    #toast {
+      position: fixed; bottom: 20px; left: 50%;
+      transform: translateX(-50%);
+      background: #1f2430; color: #87d96c;
+      padding: 8px 16px; border-radius: 6px;
+      font-size: 12px; opacity: 0;
+      transition: opacity .2s;
+      pointer-events: none;
+      border: 1px solid #2d3443; z-index: 20;
+    }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- LOGIN SCREEN -->
+  <div id="login-wrap">
+    <form class="login-card" id="login-form" autocomplete="on">
+      <h1>FLIPPY</h1>
+      <div class="field">
+        <label for="u">Username</label>
+        <input id="u" name="username" type="text" value="admin" autocomplete="username" required />
+      </div>
+      <div class="field">
+        <label for="p">Password</label>
+        <input id="p" name="password" type="password" autocomplete="current-password" required />
+      </div>
+      <button type="submit" class="login-btn" id="login-btn">SIGN IN</button>
+      <div class="login-err" id="login-err"></div>
+    </form>
+  </div>
+
+  <!-- TERMINAL SCREEN -->
+  <div id="app">
+    <div id="header">
+      <div><span class="brand">FLIPPY</span></div>
+      <div class="right">
+        <span id="status">connecting...</span>
+        <button class="icon-btn" id="fullscreen-btn" title="Toggle fullscreen (F11)">FULLSCREEN</button>
+        <button class="icon-btn danger" id="logout-btn">LOGOUT</button>
+      </div>
+    </div>
+    <div id="terminal">
+      <textarea id="hidden-paste" aria-hidden="true" tabindex="-1"></textarea>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+  <script>
+  (function () {
+    const toastEl = document.getElementById('toast');
+    const toast = (msg, color) => {
+      toastEl.textContent = msg;
+      toastEl.style.color = color || '#87d96c';
+      toastEl.classList.add('show');
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => toastEl.classList.remove('show'), 1200);
+    };
+
+    // ---------- LOGIN FLOW ----------
+    const loginWrap = document.getElementById('login-wrap');
+    const appEl = document.getElementById('app');
+    const form = document.getElementById('login-form');
+    const errEl = document.getElementById('login-err');
+    const loginBtn = document.getElementById('login-btn');
+    const uInput = document.getElementById('u');
+    const pInput = document.getElementById('p');
+
+    const showApp = () => {
+      loginWrap.style.display = 'none';
+      appEl.classList.add('active');
+      startTerminal();
+    };
+    const showLogin = () => {
+      loginWrap.style.display = 'flex';
+      appEl.classList.remove('active');
+      setTimeout(() => pInput.focus(), 50);
+    };
+
+    fetch('/api/me').then(r => r.json()).then(j => {
+      if (j.authenticated) showApp();
+      else showLogin();
+    }).catch(showLogin);
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.textContent = '';
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'SIGNING IN...';
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: uInput.value, password: pInput.value }),
+        });
+        if (res.ok) {
+          showApp();
+        } else {
+          errEl.textContent = 'Invalid credentials';
+          pInput.value = '';
+          pInput.focus();
+        }
+      } catch (err) {
+        errEl.textContent = 'Login failed: ' + err.message;
+      } finally {
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'SIGN IN';
+      }
+    });
+
+    document.getElementById('logout-btn').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.reload();
+    });
+
+    // ---------- FULLSCREEN ----------
+    const toggleFullscreen = () => {
+      if (!document.fullscreenElement) {
+        (document.documentElement.requestFullscreen || (() => {})).call(document.documentElement);
+      } else {
+        document.exitFullscreen();
+      }
+    };
+    document.addEventListener('fullscreenchange', () => {
+      document.body.classList.toggle('fullscreen', !!document.fullscreenElement);
+      if (fitAddon) setTimeout(() => fitAddon.fit() || sendResize(), 50);
+    });
+    // F11 anywhere
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'F11') {
+        e.preventDefault();
+        toggleFullscreen();
+      }
+    });
+    document.getElementById('fullscreen-btn').addEventListener('click', toggleFullscreen);
+
+    // ---------- TERMINAL ----------
+    let ws = null, term = null, fitAddon = null;
+    const sendResize = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send('\x01' + JSON.stringify({
+        type: 'resize', cols: term.cols, rows: term.rows,
+      }));
+    };
+
+    function startTerminal() {
+      if (term) return;
+      const statusEl = document.getElementById('status');
+      const hiddenPaste = document.getElementById('hidden-paste');
+
+      term = new Terminal({
+        cursorBlink: true,
+        fontFamily: "'Cascadia Code', Consolas, 'Courier New', monospace",
+        fontSize: 14,
+        scrollback: 5000,
+        rightClickSelectsWord: false,
+        macOptionIsMeta: true,
+        allowProposedApi: true,
+        theme: {
+          background: '#000000', foreground: '#e6e6e6',
+          cursor: '#ffb454', selectionBackground: '#2a3b50',
+          black: '#000000', red: '#ff6b6b', green: '#87d96c',
+          yellow: '#ffb454', blue: '#73d0ff', magenta: '#d4bfff',
+          cyan: '#95e6cb', white: '#e6e6e6',
+        },
+      });
+      fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      const termEl = document.getElementById('terminal');
+      term.open(termEl);
+      fitAddon.fit();
+
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        statusEl.textContent = 'connected';
+        statusEl.className = 'connected';
+        sendResize();
+        term.focus();
+      };
+      ws.onmessage = (ev) => {
+        const data = typeof ev.data === 'string'
+          ? ev.data
+          : new TextDecoder().decode(new Uint8Array(ev.data));
+        term.write(data);
+      };
+      ws.onclose = () => {
+        statusEl.textContent = 'disconnected';
+        statusEl.className = 'disconnected';
+        term.write('\r\n\x1b[33m[flippy] session closed — click LOGOUT to reconnect\x1b[0m\r\n');
+      };
+      ws.onerror = () => {
+        statusEl.textContent = 'error';
+        statusEl.className = 'disconnected';
+      };
+
+      term.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(data);
+      });
+
+      window.addEventListener('resize', () => { fitAddon.fit(); sendResize(); });
+
+      // ---------- COPY (with auto-copy on selection) ----------
+      const copyText = (txt) => {
+        if (!txt) return false;
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(txt).then(
+            () => toast('copied'),
+            () => fallbackCopy(txt)
+          );
+          return true;
+        }
+        return fallbackCopy(txt);
+      };
+      const fallbackCopy = (txt) => {
+        const ta = document.createElement('textarea');
+        ta.value = txt;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+        if (ok) toast('copied');
+        return ok;
+      };
+      const copySelection = () => {
+        const sel = term.getSelection();
+        if (!sel) return false;
+        copyText(sel);
+        return true;
+      };
+
+      // Auto-copy whenever the user finishes a selection (mouse release / keyboard shift-arrow release)
+      let lastCopied = '';
+      const maybeAutoCopy = () => {
+        const sel = term.getSelection();
+        if (sel && sel.length > 0 && sel !== lastCopied) {
+          lastCopied = sel;
+          copyText(sel);
+        }
+      };
+      termEl.addEventListener('mouseup', () => setTimeout(maybeAutoCopy, 10));
+      // Also when selection changes via keyboard (shift-click, etc.)
+      term.onSelectionChange(() => {
+        // Debounce; wait for the user to settle
+        clearTimeout(maybeAutoCopy._t);
+        maybeAutoCopy._t = setTimeout(() => {
+          // Only auto-copy if the terminal isn't currently being clicked (mouse down)
+          if (!isMouseDown) maybeAutoCopy();
+        }, 180);
+      });
+
+      let isMouseDown = false;
+      termEl.addEventListener('mousedown', () => { isMouseDown = true; });
+      document.addEventListener('mouseup', () => { isMouseDown = false; });
+
+      // ---------- PASTE ----------
+      const sendToTerm = (txt) => {
+        if (!txt) return;
+        if (ws.readyState === WebSocket.OPEN) ws.send(txt);
+        term.focus();
+      };
+      const triggerPaste = () => {
+        hiddenPaste.value = '';
+        hiddenPaste.focus();
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then(
+            (txt) => { if (txt) sendToTerm(txt); term.focus(); },
+            () => { term.focus(); toast('paste blocked', '#ff6b6b'); }
+          );
+        } else {
+          term.focus();
+          toast('paste not supported', '#ff6b6b');
+        }
+      };
+
+      hiddenPaste.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const txt = (e.clipboardData || window.clipboardData).getData('text');
+        sendToTerm(txt);
+      });
+      termEl.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const txt = (e.clipboardData || window.clipboardData).getData('text');
+        sendToTerm(txt);
+      });
+
+      // Double-click to paste (clears any auto-selected word first)
+      termEl.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        term.clearSelection();
+        triggerPaste();
+      });
+
+      // ---------- KEY SHORTCUTS ----------
+      term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== 'keydown') return true;
+
+        // F11 — let the document listener handle it
+        if (e.key === 'F11') { return false; }
+
+        // Ctrl+Shift+C → copy
+        if (e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
+          copySelection();
+          return false;
+        }
+        // Ctrl+Shift+V → paste
+        if (e.ctrlKey && e.shiftKey && e.code === 'KeyV') {
+          triggerPaste();
+          return false;
+        }
+        // Ctrl+Insert → copy
+        if (e.ctrlKey && !e.shiftKey && e.key === 'Insert') {
+          copySelection();
+          return false;
+        }
+        // Shift+Insert → paste
+        if (!e.ctrlKey && e.shiftKey && e.key === 'Insert') {
+          triggerPaste();
+          return false;
+        }
+        // Ctrl+C with selection → copy; without → SIGINT
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyC') {
+          if (term.hasSelection()) {
+            copySelection();
+            return false;
+          }
+        }
+        // Ctrl+V → paste
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyV') {
+          triggerPaste();
+          return false;
+        }
+        return true;
+      });
+
+      // Right-click: copy if selection, else paste. Shift+right-click = native menu.
+      termEl.addEventListener('contextmenu', (e) => {
+        if (e.shiftKey) return;
+        e.preventDefault();
+        if (term.hasSelection()) copySelection();
+        else triggerPaste();
+      });
+      // Middle-click paste
+      termEl.addEventListener('auxclick', (e) => {
+        if (e.button === 1) { e.preventDefault(); triggerPaste(); }
+      });
+    }
+  })();
+  </script>
+</body>
+</html>

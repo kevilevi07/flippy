@@ -1,0 +1,35 @@
+# Rust
+terminal/target/
+terminal/Cargo.lock
+
+# Node / Next.js
+server/node_modules/
+server/.next/
+server/.vercel/
+
+# Env (never commit real secrets)
+.env
+.env.local
+.env*.local
+server/.env
+server/.env.local
+server/.env*.local
+
+# Logs & scratch
+*.log
+.DS_Store
+
+# Build outputs
+dist/
+dist-rs/
+
+# Local test artifacts
+public/webrok*
+server/public/flippy-linux-*
+server/public/flippy-darwin-*
+server/public/flippy-windows-*
+
+# Editor / tooling scratch
+.agents/
+.claude/
+skills-lock.json
