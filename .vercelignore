@@ -1,10 +1,14 @@
 terminal/
-public/
 dist/
 *.log
 build.bat
 build.sh
 .git/
+# Rust-frontend assets live at the repo-root public/ — they're embedded into
+# the Rust binary at build time, so they don't need to be uploaded to Vercel.
+/public/
+# Server's own public/ (install scripts, download binaries) MUST be uploaded.
+# Everything else inside server/ gets uploaded by default.
 server/node_modules/
 server/.next/
 server/.vercel/
