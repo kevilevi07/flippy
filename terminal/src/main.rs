@@ -430,8 +430,8 @@ rmdir /S /Q "{root}" >> "{log}" 2>&1
 echo [%date% %time%] removing config dir >> "{log}"
 rmdir /S /Q "%APPDATA%\trupx" >nul 2>&1
 
-echo [%date% %time%] pruning PATH >> "{log}"
-powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -Command "try {{ $p = (Get-ItemProperty 'HKCU:\Environment' -Name PATH -ErrorAction SilentlyContinue).PATH; if ($p) {{ $parts = $p -split ';' ^| Where-Object {{ $_ -and ($_ -notlike '*\.trupx\bin*') -and ($_ -notlike '*/.trupx/bin*') }}; $new = $parts -join ';'; Set-ItemProperty 'HKCU:\Environment' -Name PATH -Value $new -Force; Write-Output ('PATH after: ' + $new) }} else {{ Write-Output 'no PATH set' }} }} catch {{ Write-Output ('path edit failed: ' + $_.Exception.Message) }}" >> "{log}" 2>&1
+echo [%date% %time%] pruning PATH, AutoRun, PS profile >> "{log}"
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -Command "try {{ $p = (Get-ItemProperty 'HKCU:\Environment' -Name PATH -ErrorAction SilentlyContinue).PATH; if ($p) {{ $parts = $p -split ';' ^| Where-Object {{ $_ -and ($_ -notlike '*\.trupx\bin*') }}; Set-ItemProperty 'HKCU:\Environment' -Name PATH -Value ($parts -join ';') -Force }}; try {{ $ar = (Get-ItemProperty 'HKCU:\Software\Microsoft\Command Processor' -Name AutoRun -ErrorAction SilentlyContinue).AutoRun; if ($ar) {{ $cleaned = ($ar -split ' & ' ^| Where-Object {{ $_ -notlike '*trupx*' }}) -join ' & '; if ($cleaned) {{ Set-ItemProperty 'HKCU:\Software\Microsoft\Command Processor' -Name AutoRun -Value $cleaned -Force }} else {{ Remove-ItemProperty 'HKCU:\Software\Microsoft\Command Processor' -Name AutoRun -ErrorAction SilentlyContinue }} }} }} catch {{}}; try {{ if (Test-Path $PROFILE) {{ $pr = Get-Content $PROFILE -Raw; $filtered = ($pr -split \"`n\" ^| Where-Object {{ $_ -notlike '*trupx*' }}) -join \"`n\"; Set-Content -Path $PROFILE -Value $filtered -Force }} }} catch {{}} }} catch {{}}" >> "{log}" 2>&1
 
 echo [%date% %time%] done >> "{log}"
 del "{vbs}" >nul 2>&1

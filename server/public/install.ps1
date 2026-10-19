@@ -57,24 +57,42 @@ if (-not $Downloaded) {
     exit 1
 }
 
-# ---- Strategy 1: User PATH + setx broadcast ----
+# ---- Strategy 1: User PATH via registry (handles long values) ----
+# NOTE: we deliberately do NOT call `setx`. On systems where the user PATH
+# is > 1024 bytes, setx silently truncates. Set-ItemProperty handles any
+# length. We also provide a cmd AutoRun fallback below that doesn't rely on
+# PATH persistence at all.
 $UserPath = ''
 try {
     $UserPath = (Get-ItemProperty 'HKCU:\Environment' -Name PATH -ErrorAction Stop).PATH
 } catch { }
 if ($UserPath -notlike "*$InstallDir*") {
     $NewPath = if ($UserPath) { "$UserPath;$InstallDir" } else { $InstallDir }
-    try { Set-ItemProperty -Path 'HKCU:\Environment' -Name PATH -Value $NewPath -Force } catch { }
-    $NowPath = $NewPath
-    L "appended InstallDir to user PATH"
+    try {
+        Set-ItemProperty -Path 'HKCU:\Environment' -Name PATH -Value $NewPath -Force
+        L "appended InstallDir to user PATH (length $($NewPath.Length))"
+    } catch { L "Set-ItemProperty PATH failed: $($_.Exception.Message)" }
 } else {
-    $NowPath = $UserPath
+    L "InstallDir already on user PATH"
 }
-# setx triggers WM_SETTINGCHANGE so Explorer-launched new terminals see it.
+
+# ---- Strategy 1b: cmd AutoRun — guarantees cmd sees .trupx\bin ----
+# HKCU\Software\Microsoft\Command Processor\AutoRun runs on EVERY cmd start.
+# We prepend .trupx\bin to PATH there. No broadcast / Explorer refresh needed.
 try {
-    $null = & setx PATH "$NowPath" 2>&1
-    L "setx broadcast done (exit=$LASTEXITCODE)"
-} catch { L "setx exception: $($_.Exception.Message)" }
+    $cpKey = 'HKCU:\Software\Microsoft\Command Processor'
+    if (-not (Test-Path $cpKey)) { New-Item -Path $cpKey -Force | Out-Null }
+    $existing = ''
+    try { $existing = (Get-ItemProperty $cpKey -Name AutoRun -ErrorAction Stop).AutoRun } catch { }
+    $trupxLine = "set PATH=%USERPROFILE%\.trupx\bin;%PATH%"
+    if ($existing -notlike "*trupx*") {
+        $new = if ($existing) { "$existing & $trupxLine" } else { $trupxLine }
+        Set-ItemProperty -Path $cpKey -Name AutoRun -Value $new -Force
+        L "wrote cmd AutoRun"
+    } else {
+        L "cmd AutoRun already has trupx entry"
+    }
+} catch { L "cmd AutoRun failed: $($_.Exception.Message)" }
 
 # ---- Strategy 2: Copy exe to WindowsApps (always on PATH on Win 10+) ----
 $WinAppsDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
