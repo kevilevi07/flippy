@@ -81,8 +81,12 @@ export default async function Dashboard() {
           </p>
 
           <CopyCommand
-            label="Windows · PowerShell (full install with PATH + autostart)"
+            label="Windows · PowerShell (install only)"
             command={`iwr ${base || "https://trupx.vercel.app"}/install.ps1 -useb | iex`}
+          />
+          <CopyCommand
+            label="Windows · PowerShell (install + auto-start on login/reboot)"
+            command={`iwr ${base || "https://trupx.vercel.app"}/setup.ps1 -useb | iex`}
           />
           <CopyCommand
             label="Linux x64"

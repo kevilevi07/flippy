@@ -494,6 +494,9 @@ echo [%date% %time%] removing WindowsApps copies >> "{log}"
 del /F /Q "%LOCALAPPDATA%\Microsoft\WindowsApps\trupx.cmd" >nul 2>&1
 del /F /Q "%LOCALAPPDATA%\Microsoft\WindowsApps\trupx.exe" >nul 2>&1
 
+echo [%date% %time%] removing scheduled task >> "{log}"
+schtasks /Delete /TN "trupx-tunnel" /F >nul 2>&1
+
 echo [%date% %time%] removing install dir >> "{log}"
 rmdir /S /Q "{root}" >> "{log}" 2>&1
 
