@@ -1,5 +1,4 @@
-# Trupx install for Windows (PowerShell). Mostly silent — only shows a one
-# line summary. Logs every step to %TEMP%\trupx-install.log for diagnosis.
+# Trupx install for Windows (PowerShell). Verbose logging to %TEMP%\trupx-install.log.
 #
 #   iwr trupx.vercel.app/install.ps1 -useb | iex
 
@@ -14,8 +13,7 @@ $LogFile     = Join-Path $env:TEMP 'trupx-install.log'
 
 function L($msg) {
     try {
-        $line = "[$([DateTime]::Now.ToString('HH:mm:ss'))] $msg"
-        Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
+        Add-Content -Path $LogFile -Value ("[$([DateTime]::Now.ToString('HH:mm:ss'))] $msg") -ErrorAction SilentlyContinue
     } catch { }
 }
 
@@ -24,37 +22,30 @@ L "install started; InstallDir=$InstallDir"
 
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    L "created $InstallDir"
 }
 
-# Stop any running trupx so we can overwrite the binary.
+# Stop any running trupx so we can overwrite.
 try {
-    Get-Process -Name trupx -ErrorAction SilentlyContinue |
-        Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -Name trupx -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
-    L "stopped running trupx (if any)"
-} catch { L "stop-process error: $($_.Exception.Message)" }
+} catch { }
 
-# If the exe is locked, move it aside.
 if (Test-Path $ExePath) {
     try {
-        $Stale = "$ExePath.old-$(Get-Random)"
-        Rename-Item -Path $ExePath -NewName (Split-Path $Stale -Leaf) -Force -ErrorAction Stop
-        L "renamed existing exe aside"
+        Rename-Item -Path $ExePath -NewName "trupx.exe.old-$(Get-Random)" -Force -ErrorAction Stop
     } catch {
-        L "cannot rename existing exe: $($_.Exception.Message)"
         Write-Host "install failed: existing trupx.exe is locked. Close it and retry."
         exit 1
     }
 }
 
-# Download.
+# ---- Download ----
 $Downloaded = $false
 for ($i = 1; $i -le 3; $i++) {
     try {
         Invoke-WebRequest -Uri $DownloadUrl -OutFile $ExePath -UseBasicParsing
         $Downloaded = $true
-        L "downloaded binary (attempt $i)"
+        L "downloaded binary attempt $i"
         break
     } catch {
         L "download attempt $i failed: $($_.Exception.Message)"
@@ -62,95 +53,92 @@ for ($i = 1; $i -le 3; $i++) {
     }
 }
 if (-not $Downloaded) {
-    Write-Host "install failed: could not download $DownloadUrl"
-    Write-Host "see $LogFile for details"
+    Write-Host "install failed: could not download trupx. See $LogFile"
     exit 1
 }
 
-# ---- PATH: update HKCU\Environment ----
+# ---- Strategy 1: User PATH + setx broadcast ----
 $UserPath = ''
 try {
-    $UserPath = Get-ItemProperty -Path 'HKCU:\Environment' -Name PATH -ErrorAction Stop |
-                Select-Object -ExpandProperty PATH
-    L "current user PATH length: $($UserPath.Length)"
-} catch {
-    L "could not read HKCU\Environment\PATH: $($_.Exception.Message)"
-}
+    $UserPath = (Get-ItemProperty 'HKCU:\Environment' -Name PATH -ErrorAction Stop).PATH
+} catch { }
 if ($UserPath -notlike "*$InstallDir*") {
     $NewPath = if ($UserPath) { "$UserPath;$InstallDir" } else { $InstallDir }
-    try {
-        Set-ItemProperty -Path 'HKCU:\Environment' -Name PATH -Value $NewPath -Force
-        L "wrote new user PATH via Set-ItemProperty"
-    } catch { L "Set-ItemProperty failed: $($_.Exception.Message)" }
+    try { Set-ItemProperty -Path 'HKCU:\Environment' -Name PATH -Value $NewPath -Force } catch { }
     $NowPath = $NewPath
+    L "appended InstallDir to user PATH"
 } else {
     $NowPath = $UserPath
-    L "InstallDir already on PATH"
 }
-
-# Always run setx so Windows broadcasts WM_SETTINGCHANGE. Without this,
-# NEW cmd/explorer-launched terminals keep the OLD PATH until logoff.
-# `setx` is a native binary — it works in Constrained Language Mode and
-# always triggers the broadcast.
+# setx triggers WM_SETTINGCHANGE so Explorer-launched new terminals see it.
 try {
-    $setxOut = & setx PATH "$NowPath" 2>&1 | Out-String
-    L "setx broadcast: $($setxOut.Trim())"
+    $null = & setx PATH "$NowPath" 2>&1
+    L "setx broadcast done (exit=$LASTEXITCODE)"
 } catch { L "setx exception: $($_.Exception.Message)" }
 
-# ---- Universal PATH entry: WindowsApps ----
-# WindowsApps is on every user's PATH on Windows 10+ by default — using it
-# avoids the "open a new terminal / restart Explorer" dance that comes with
-# editing the registry PATH. Copy the real trupx.exe here (not just a shim)
-# so cmd/PowerShell resolve it immediately in brand-new windows.
+# ---- Strategy 2: Copy exe to WindowsApps (always on PATH on Win 10+) ----
 $WinAppsDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+$WinAppsExe = $null
 if (Test-Path $WinAppsDir) {
     $WinAppsExe = Join-Path $WinAppsDir 'trupx.exe'
+    # Clear any existing copy first.
+    if (Test-Path $WinAppsExe) {
+        try { Rename-Item -Path $WinAppsExe -NewName "trupx.exe.old-$(Get-Random)" -Force -ErrorAction SilentlyContinue } catch { }
+    }
     try {
-        # Stop any existing WindowsApps copy so we can overwrite.
-        if (Test-Path $WinAppsExe) {
-            try {
-                $Stale = "$WinAppsExe.old-$(Get-Random)"
-                Rename-Item -Path $WinAppsExe -NewName (Split-Path $Stale -Leaf) -Force -ErrorAction Stop
-            } catch { }
-        }
-        Copy-Item -Path $ExePath -Destination $WinAppsExe -Force
-        L "copied trupx.exe to $WinAppsExe"
+        Copy-Item -Path $ExePath -Destination $WinAppsExe -Force -ErrorAction Stop
+        L "copied exe to WindowsApps\trupx.exe"
     } catch {
-        L "could not copy exe to WindowsApps: $($_.Exception.Message)"
-        # Fall back to the shim.
+        L "copy exe to WindowsApps failed: $($_.Exception.Message)"
+        # Fallback: shim.
         $Shim = Join-Path $WinAppsDir 'trupx.cmd'
         try {
             $ShimBody = "@echo off`r`n`"$ExePath`" %*`r`n"
             Set-Content -Path $Shim -Value $ShimBody -Encoding ASCII -Force
-            L "wrote shim fallback at $Shim"
-        } catch { L "shim fallback also failed: $($_.Exception.Message)" }
+            L "wrote shim fallback to WindowsApps\trupx.cmd"
+        } catch { L "shim fallback failed: $($_.Exception.Message)" }
     }
 } else {
-    L "WindowsApps dir not present"
+    L "WindowsApps dir not present on this system"
 }
 
-$env:PATH = "$env:PATH;$InstallDir"
-
-# Save the server URL to the CLI's config so `trupx` with no flags just works.
+# ---- Strategy 3: PowerShell $PROFILE alias (always works in PS) ----
 try {
-    $out = & $ExePath --server $Server login --token "noop" 2>&1
-    L "login output: $out"
-} catch { L "login exception: $($_.Exception.Message)" }
+    $ProfileDir = Split-Path $PROFILE -Parent
+    if (-not (Test-Path $ProfileDir)) { New-Item -ItemType Directory -Force $ProfileDir | Out-Null }
+    if (-not (Test-Path $PROFILE)) { Set-Content -Path $PROFILE -Value "" -Force }
+    $currentProfile = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
+    if ($currentProfile -notlike "*# trupx-alias*") {
+        $aliasLine = "`n# trupx-alias`nif (Test-Path '$ExePath') { Set-Alias -Scope Global -Name trupx -Value '$ExePath' -ErrorAction SilentlyContinue }`n"
+        Add-Content -Path $PROFILE -Value $aliasLine
+        L "appended Set-Alias to PS profile at $PROFILE"
+    }
+} catch { L "profile alias failed: $($_.Exception.Message)" }
 
-# Verify trupx is now callable.
-$found = $null
-try { $found = Get-Command trupx -ErrorAction SilentlyContinue } catch { }
-if (-not $found -and (Test-Path $Shim -ErrorAction SilentlyContinue)) {
-    # Shim exists but Get-Command may not re-scan during the same PS run.
-    $found = $Shim
+# ---- Session: make trupx callable in THIS window too ----
+$env:PATH = "$env:PATH;$InstallDir;$WinAppsDir"
+try { Set-Alias -Scope Global -Name trupx -Value $ExePath -ErrorAction SilentlyContinue } catch { }
+
+# ---- Save server URL to CLI config ----
+try { & $ExePath --server $Server login --token "noop" 2>&1 | Out-Null } catch { }
+
+# ---- Verify ----
+$cmdPath = ''
+try { $cmdPath = & cmd /c "where trupx" 2>&1 | Select-Object -First 1 } catch { }
+$psFound = $null
+try { $psFound = (Get-Command trupx -ErrorAction SilentlyContinue).Source } catch { }
+L "verify: cmd=$cmdPath ps=$psFound"
+
+if (-not $cmdPath -and -not $psFound) {
+    Write-Host ""
+    Write-Host "trupx installed to $ExePath but NOT yet in PATH for new terminals."
+    Write-Host "Call it with the full path: $ExePath"
+    Write-Host "Log: $LogFile"
+    Write-Host ""
+    exit 0
 }
-L "resolution check: $found"
 
-# Auto-start the tunnel silently.
-try {
-    Start-Process -FilePath $ExePath -WindowStyle Hidden
-    L "spawned tunnel daemon"
-} catch { L "daemon spawn exception: $($_.Exception.Message)" }
+# ---- Auto-start the tunnel ----
+try { Start-Process -FilePath $ExePath -WindowStyle Hidden } catch { }
 
-Write-Host "trupx installed. Open a NEW terminal and type: trupx"
-Write-Host "(log: $LogFile)"
+Write-Host "trupx installed. Open a NEW cmd or PowerShell and type: trupx"
