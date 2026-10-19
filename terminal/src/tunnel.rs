@@ -84,7 +84,8 @@ pub async fn run(
     requested_name: Option<String>,
 ) -> Result<()> {
     let server = cfg.require_server()?.to_string();
-    let token = cfg.require_token()?.to_string();
+    // Token is optional — the server may not require one.
+    let token = cfg.token.clone();
     let mut tunnel_id = requested_name.or_else(|| cfg.tunnel_id.clone());
 
     let http = reqwest::Client::builder()
@@ -93,7 +94,7 @@ pub async fn run(
 
     let mut backoff = Duration::from_millis(500);
     loop {
-        match one_session(&server, &token, tunnel_id.as_deref(), &http, local_host, local_port)
+        match one_session(&server, token.as_deref(), tunnel_id.as_deref(), &http, local_host, local_port)
             .await
         {
             Ok(Some(assigned)) => {
@@ -115,7 +116,7 @@ pub async fn run(
 /// Returns Ok(Some(tunnel_id)) if a tunnel id was assigned/confirmed this session.
 async fn one_session(
     server: &str,
-    token: &str,
+    token: Option<&str>,
     reuse_id: Option<&str>,
     http: &reqwest::Client,
     local_host: &str,
@@ -134,10 +135,12 @@ async fn one_session(
     };
 
     let mut req = ws_url.as_str().into_client_request()?;
-    req.headers_mut().insert(
-        AUTHORIZATION,
-        format!("Bearer {token}").parse().expect("valid header"),
-    );
+    if let Some(t) = token {
+        req.headers_mut().insert(
+            AUTHORIZATION,
+            format!("Bearer {t}").parse().expect("valid header"),
+        );
+    }
 
     crate::terminal::append_log(&format!("tunnel: connecting {}", ws_url));
     let host = ws_url.host_str().context("ws url has no host")?.to_string();

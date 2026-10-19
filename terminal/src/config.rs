@@ -48,6 +48,6 @@ impl Config {
     pub fn require_token(&self) -> Result<&str> {
         self.token
             .as_deref()
-            .context("not logged in. Run: trupx login")
+            .context("not logged in. Run: trupx login (only needed if your server requires auth)")
     }
 }

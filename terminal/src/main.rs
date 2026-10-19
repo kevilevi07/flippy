@@ -162,7 +162,7 @@ fn main() {
         // Local HTTP+WS server (always on).
         let server_task = tokio::spawn(terminal::serve(user.clone(), pass, shell, port));
 
-        // Optional outbound tunnel.
+        // Optional outbound tunnel. Server URL is required; token is not.
         let tunnel_task = if tunnel {
             let mut cfg = match config::Config::load() {
                 Ok(c) => c,
@@ -174,23 +174,21 @@ fn main() {
             if let Some(s) = tunnel_server {
                 cfg.server = Some(s);
             }
-            if cfg.server.is_none() || cfg.token.is_none() {
-                eprintln!(
-                    "tunnel: not configured. Run `trupx login --token <fly_...>` first."
-                );
-                None
-            } else {
-                let local_host = "127.0.0.1".to_string();
-                terminal::append_log(&format!(
-                    "tunnel starting: server={} name={:?}",
-                    cfg.server.as_deref().unwrap_or("?"), tunnel_name
-                ));
-                Some(tokio::spawn(async move {
-                    if let Err(e) = tunnel::run(&cfg, &local_host, port, tunnel_name).await {
-                        terminal::append_log(&format!("tunnel ended: {}", e));
-                    }
-                }))
+            // Default to the public trupx server if nothing's configured so
+            // the user can go from zero to tunnel in one command.
+            if cfg.server.is_none() {
+                cfg.server = Some("https://trupx.vercel.app".to_string());
             }
+            let local_host = "127.0.0.1".to_string();
+            terminal::append_log(&format!(
+                "tunnel starting: server={} name={:?}",
+                cfg.server.as_deref().unwrap_or("?"), tunnel_name
+            ));
+            Some(tokio::spawn(async move {
+                if let Err(e) = tunnel::run(&cfg, &local_host, port, tunnel_name).await {
+                    terminal::append_log(&format!("tunnel ended: {}", e));
+                }
+            }))
         } else {
             None
         };

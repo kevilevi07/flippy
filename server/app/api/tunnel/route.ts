@@ -1,7 +1,8 @@
 // WebSocket endpoint that holds a persistent connection from the Rust CLI.
 //
-// Auth: single `CLI_TOKEN` env var — set when you deploy. The CLI sends it
-// as `Authorization: Bearer <token>`. One token = one admin = you.
+// No auth: this server is single-user, and the admin dashboard is already
+// gated by ADMIN_USERNAME/PASSWORD. If a requested tunnel name is already
+// live we auto-suffix with a short random string so there are no clashes.
 //
 // Cross-instance state (tunnel registry + request/response bridging) lives
 // in Vercel Marketplace Postgres (Neon), via lib/db.ts.
@@ -12,44 +13,37 @@ import type { Frame } from "@/lib/proto";
 import { newId } from "@/lib/proto";
 import { keys, kv, pubsub, TUNNEL_TTL_SECONDS } from "@/lib/db";
 import { isValidName } from "@/lib/names";
-import { timingSafeEqual } from "node:crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function tokenOk(provided: string): boolean {
-  const expected = (process.env.CLI_TOKEN ?? "").trim();
-  if (!expected) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 export async function GET(req: Request): Promise<Response> {
-  const auth = req.headers.get("authorization") ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!token || !tokenOk(token)) {
-    return new Response("invalid or missing bearer token", { status: 401 });
-  }
-
   const url = new URL(req.url);
   const requested = url.searchParams.get("name") ?? url.searchParams.get("tid");
 
   let tid: string;
   if (requested) {
     if (!isValidName(requested)) {
-      return new Response(
-        "invalid app name: use 3-32 chars, lowercase a-z 0-9 and hyphens, " +
-          "and avoid reserved words (api, _next, oauth, dashboard, login, ...)",
-        { status: 400 },
-      );
+      // Rather than reject, strip to a valid stem and auto-suffix.
+      const stem = requested
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "")
+        .replace(/^-+|-+$/g, "");
+      tid = `${stem || "term"}-${newId(4)}`;
+    } else {
+      const existing = await kv.get(keys.tunnel(requested));
+      if (existing) {
+        // Name is live — add a short random suffix so the user still gets a URL.
+        tid = `${requested}-${newId(4)}`;
+      } else {
+        tid = requested;
+      }
     }
-    tid = requested;
   } else {
     tid = newId(8);
   }
 
-  const publicBase = (process.env.PUBLIC_URL ?? url.origin).replace(/\/$/, "");
+  const publicBase = (process.env.TRUPX_PUBLIC_URL ?? url.origin).replace(/\/$/, "");
   const publicUrl = `${publicBase}/${tid}`;
 
   return upgradeWebSocket(async (ws: WebSocket) => {
