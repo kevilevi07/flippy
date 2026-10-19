@@ -64,16 +64,44 @@ else
     pkill -x trupx 2>/dev/null || true
     sleep 0.5
 
+    DOWNLOAD_OK=0
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "$EXE" "$URL" || { echo "download failed; see $LOG" >&2; exit 1; }
+        if curl -fsSL -o "$EXE" "$URL" 2>>"$LOG"; then DOWNLOAD_OK=1; fi
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$EXE" "$URL" || { echo "download failed; see $LOG" >&2; exit 1; }
+        if wget -q -O "$EXE" "$URL" 2>>"$LOG"; then DOWNLOAD_OK=1; fi
     else
         echo "ERROR: curl or wget required" >&2
         exit 1
     fi
-    chmod +x "$EXE"
-    log "downloaded -> $EXE"
+
+    if [ "$DOWNLOAD_OK" = "0" ]; then
+        log "download 404 or network failure; falling back to source build"
+        echo "No prebuilt binary available yet for ${OS}/${ARCH}. Building from source..."
+        if ! command -v cargo >/dev/null 2>&1; then
+            echo "Trupx needs Rust to build. Install from https://rustup.rs" >&2
+            exit 1
+        fi
+        if ! command -v git >/dev/null 2>&1; then
+            echo "Trupx needs git to clone." >&2
+            exit 1
+        fi
+        TMPDIR_BUILD="$(mktemp -d)"
+        git clone --depth 1 "https://github.com/${REPO}.git" "${TMPDIR_BUILD}/trupx" >>"$LOG" 2>&1 || {
+            echo "git clone failed; see $LOG" >&2
+            exit 1
+        }
+        ( cd "${TMPDIR_BUILD}/trupx/terminal" && cargo build --release >>"$LOG" 2>&1 ) || {
+            echo "build failed; see $LOG" >&2
+            exit 1
+        }
+        cp -f "${TMPDIR_BUILD}/trupx/terminal/target/release/trupx" "$EXE"
+        chmod +x "$EXE"
+        rm -rf "$TMPDIR_BUILD"
+        log "built from source -> $EXE"
+    else
+        chmod +x "$EXE"
+        log "downloaded -> $EXE"
+    fi
 fi
 
 # Ensure $HOME/.trupx/bin is on PATH for future shells.
