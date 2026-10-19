@@ -181,8 +181,24 @@ fn main() {
             println!();
         }
 
-        // Local HTTP+WS server (always on).
-        let server_task = tokio::spawn(terminal::serve(user.clone(), pass, shell, port));
+        // Choose bind address:
+        //   - With --tunnel: 127.0.0.1 on a random port. Not reachable from
+        //     the LAN or by the user directly; only the tunnel forwarder (in
+        //     this same process) connects to it over loopback.
+        //   - Without --tunnel: 0.0.0.0:<port> so the LAN can reach it (the
+        //     old behavior).
+        let (bind_addr, port_tx, port_rx): (
+            std::net::SocketAddr,
+            Option<tokio::sync::oneshot::Sender<u16>>,
+            Option<tokio::sync::oneshot::Receiver<u16>>,
+        ) = if tunnel {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            (std::net::SocketAddr::from(([127, 0, 0, 1], 0)), Some(tx), Some(rx))
+        } else {
+            (std::net::SocketAddr::from(([0, 0, 0, 0], port)), None, None)
+        };
+
+        let server_task = tokio::spawn(terminal::serve(user.clone(), pass, shell, bind_addr, port_tx));
 
         // Optional outbound tunnel. Server URL is required; token is not.
         let tunnel_task = if tunnel {
@@ -196,18 +212,23 @@ fn main() {
             if let Some(s) = tunnel_server {
                 cfg.server = Some(s);
             }
-            // Default to the public trupx server if nothing's configured so
-            // the user can go from zero to tunnel in one command.
             if cfg.server.is_none() {
                 cfg.server = Some("https://trupx.vercel.app".to_string());
             }
-            let local_host = "127.0.0.1".to_string();
             terminal::append_log(&format!(
                 "tunnel starting: server={} name={:?}",
                 cfg.server.as_deref().unwrap_or("?"), tunnel_name
             ));
+            // Wait for the real bound port (chosen by the OS) before the
+            // tunnel forwarder tries to connect to it.
+            let actual_port = if let Some(rx) = port_rx {
+                rx.await.unwrap_or(port)
+            } else {
+                port
+            };
             Some(tokio::spawn(async move {
-                if let Err(e) = tunnel::run(&cfg, &local_host, port, tunnel_name).await {
+                let local_host = "127.0.0.1".to_string();
+                if let Err(e) = tunnel::run(&cfg, &local_host, actual_port, tunnel_name).await {
                     terminal::append_log(&format!("tunnel ended: {}", e));
                 }
             }))
@@ -385,6 +406,14 @@ fn cmd_uninstall() -> i32 {
         ));
         let log_path = temp.join("trupx-uninstall.log");
 
+        // VBScript wrapper that launches the batch file truly hidden (window
+        // mode = 0, wait = false). Avoids the brief flashes a bare `cmd /c`
+        // produces even with CREATE_NO_WINDOW.
+        let vbs_path = temp.join(format!(
+            "trupx-uninstall-{}.vbs",
+            rand::thread_rng().gen::<u32>()
+        ));
+
         let bat = format!(
 r#"@echo off
 echo [%date% %time%] uninstall script started > "{log}"
@@ -403,21 +432,32 @@ echo [%date% %time%] removing config dir >> "{log}"
 rmdir /S /Q "%APPDATA%\trupx" >nul 2>&1
 
 echo [%date% %time%] pruning PATH >> "{log}"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try {{ $p = (Get-ItemProperty 'HKCU:\Environment' -Name PATH -ErrorAction SilentlyContinue).PATH; if ($p) {{ $parts = $p -split ';' ^| Where-Object {{ $_ -and ($_ -notlike '*\.trupx\bin*') -and ($_ -notlike '*/.trupx/bin*') }}; $new = $parts -join ';'; Set-ItemProperty 'HKCU:\Environment' -Name PATH -Value $new -Force; Write-Output ('PATH after: ' + $new) }} else {{ Write-Output 'no PATH set' }} }} catch {{ Write-Output ('path edit failed: ' + $_.Exception.Message) }}" >> "{log}" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -Command "try {{ $p = (Get-ItemProperty 'HKCU:\Environment' -Name PATH -ErrorAction SilentlyContinue).PATH; if ($p) {{ $parts = $p -split ';' ^| Where-Object {{ $_ -and ($_ -notlike '*\.trupx\bin*') -and ($_ -notlike '*/.trupx/bin*') }}; $new = $parts -join ';'; Set-ItemProperty 'HKCU:\Environment' -Name PATH -Value $new -Force; Write-Output ('PATH after: ' + $new) }} else {{ Write-Output 'no PATH set' }} }} catch {{ Write-Output ('path edit failed: ' + $_.Exception.Message) }}" >> "{log}" 2>&1
 
 echo [%date% %time%] done >> "{log}"
+del "{vbs}" >nul 2>&1
 del "%~f0" >nul 2>&1
 "#,
             log = log_path.display(),
             root = user_root.display(),
+            vbs = vbs_path.display(),
         );
         let _ = fs::write(&bat_path, bat);
+
+        // VBScript: launch bat with WindowStyle = 0 (hidden), wait = False.
+        let vbs = format!(
+r#"Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run Chr(34) & "{bat}" & Chr(34), 0, False
+"#,
+            bat = bat_path.display(),
+        );
+        let _ = fs::write(&vbs_path, vbs);
 
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", bat_path.to_string_lossy().as_ref()])
+        let _ = std::process::Command::new("wscript")
+            .args(["//nologo", vbs_path.to_string_lossy().as_ref()])
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

@@ -140,9 +140,16 @@ pub fn kill_running() -> (bool, Option<u32>) {
     (killed, Some(pid))
 }
 
-/// Run the terminal HTTP + WS server in the current task. Blocks the caller
-/// until Ctrl+C or an error.
-pub async fn serve(user: String, pass: String, shell: String, port: u16) {
+/// Run the terminal HTTP + WS server, bound on the given address. Blocks the
+/// caller until Ctrl+C or an error. Reports the actual bound port to the
+/// optional `port_tx` channel — useful for `bind_addr`s with port 0 (OS-chosen).
+pub async fn serve(
+    user: String,
+    pass: String,
+    shell: String,
+    bind_addr: SocketAddr,
+    port_tx: Option<tokio::sync::oneshot::Sender<u16>>,
+) {
     let state = AppState {
         user,
         pass,
@@ -158,10 +165,13 @@ pub async fn serve(user: String, pass: String, shell: String, port: u16) {
         .fallback(static_handler)
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    match tokio::net::TcpListener::bind(addr).await {
+    match tokio::net::TcpListener::bind(bind_addr).await {
         Ok(listener) => {
-            append_log(&format!("listening on {}", addr));
+            let actual = listener.local_addr().ok();
+            append_log(&format!("listening on {:?}", actual));
+            if let (Some(a), Some(tx)) = (actual, port_tx) {
+                let _ = tx.send(a.port());
+            }
             let server = axum::serve(listener, app);
             tokio::select! {
                 r = server => { let _ = r; }
@@ -172,12 +182,12 @@ pub async fn serve(user: String, pass: String, shell: String, port: u16) {
             let _ = fs::remove_file(pid_file());
         }
         Err(e) => {
-            append_log(&format!("bind failed on port {}: {}", port, e));
+            append_log(&format!("bind failed on {}: {}", bind_addr, e));
             message_box(
                 "Trupx",
                 &format!(
-                    "Cannot bind to port {}:\n{}\n\nIs another instance already running? Try `trupx stop`.",
-                    port, e
+                    "Cannot bind to {}:\n{}\n\nIs another instance already running? Try `trupx stop`.",
+                    bind_addr, e
                 ),
             );
             let _ = fs::remove_file(pid_file());
