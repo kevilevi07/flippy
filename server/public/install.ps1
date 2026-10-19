@@ -97,16 +97,33 @@ try {
     L "setx broadcast: $($setxOut.Trim())"
 } catch { L "setx exception: $($_.Exception.Message)" }
 
-# ---- WindowsApps shim ----
+# ---- Universal PATH entry: WindowsApps ----
+# WindowsApps is on every user's PATH on Windows 10+ by default — using it
+# avoids the "open a new terminal / restart Explorer" dance that comes with
+# editing the registry PATH. Copy the real trupx.exe here (not just a shim)
+# so cmd/PowerShell resolve it immediately in brand-new windows.
 $WinAppsDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
 if (Test-Path $WinAppsDir) {
-    $Shim = Join-Path $WinAppsDir 'trupx.cmd'
-    $ShimBody = "@echo off`r`n`"$ExePath`" %*`r`n"
+    $WinAppsExe = Join-Path $WinAppsDir 'trupx.exe'
     try {
-        Set-Content -Path $Shim -Value $ShimBody -Encoding ASCII -Force
-        L "wrote shim at $Shim"
+        # Stop any existing WindowsApps copy so we can overwrite.
+        if (Test-Path $WinAppsExe) {
+            try {
+                $Stale = "$WinAppsExe.old-$(Get-Random)"
+                Rename-Item -Path $WinAppsExe -NewName (Split-Path $Stale -Leaf) -Force -ErrorAction Stop
+            } catch { }
+        }
+        Copy-Item -Path $ExePath -Destination $WinAppsExe -Force
+        L "copied trupx.exe to $WinAppsExe"
     } catch {
-        L "could not write shim: $($_.Exception.Message)"
+        L "could not copy exe to WindowsApps: $($_.Exception.Message)"
+        # Fall back to the shim.
+        $Shim = Join-Path $WinAppsDir 'trupx.cmd'
+        try {
+            $ShimBody = "@echo off`r`n`"$ExePath`" %*`r`n"
+            Set-Content -Path $Shim -Value $ShimBody -Encoding ASCII -Force
+            L "wrote shim fallback at $Shim"
+        } catch { L "shim fallback also failed: $($_.Exception.Message)" }
     }
 } else {
     L "WindowsApps dir not present"

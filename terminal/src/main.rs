@@ -374,13 +374,11 @@ fn cmd_uninstall() -> i32 {
 
     #[cfg(windows)]
     {
-        // Remove the WindowsApps shim NOW so `trupx` disappears from PATH immediately.
+        // Remove the WindowsApps copies NOW so `trupx` disappears from PATH immediately.
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let shim = std::path::PathBuf::from(local)
-                .join("Microsoft")
-                .join("WindowsApps")
-                .join("trupx.cmd");
-            let _ = fs::remove_file(&shim);
+            let base = std::path::PathBuf::from(local).join("Microsoft").join("WindowsApps");
+            let _ = fs::remove_file(base.join("trupx.cmd"));
+            let _ = fs::remove_file(base.join("trupx.exe"));
         }
 
         // Build a self-contained cleanup .bat in %TEMP% that:
@@ -422,8 +420,9 @@ timeout /t 3 /nobreak >nul 2>&1
 echo [%date% %time%] killing residual trupx >> "{log}"
 taskkill /F /IM trupx.exe >nul 2>&1
 
-echo [%date% %time%] removing shim >> "{log}"
+echo [%date% %time%] removing WindowsApps copies >> "{log}"
 del /F /Q "%LOCALAPPDATA%\Microsoft\WindowsApps\trupx.cmd" >nul 2>&1
+del /F /Q "%LOCALAPPDATA%\Microsoft\WindowsApps\trupx.exe" >nul 2>&1
 
 echo [%date% %time%] removing install dir >> "{log}"
 rmdir /S /Q "{root}" >> "{log}" 2>&1
