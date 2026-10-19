@@ -89,20 +89,12 @@ export default async function Dashboard() {
             command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-linux-x64 -o trupx && chmod +x trupx && ./trupx`}
           />
           <CopyCommand
-            label="Linux arm64"
+            label="Linux arm64 (Pi, Graviton, etc.)"
             command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-linux-aarch64 -o trupx && chmod +x trupx && ./trupx`}
           />
           <CopyCommand
-            label="macOS Intel"
-            command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-darwin-x64 -o trupx && chmod +x trupx && ./trupx`}
-          />
-          <CopyCommand
-            label="macOS Apple Silicon"
-            command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-darwin-aarch64 -o trupx && chmod +x trupx && ./trupx`}
-          />
-          <CopyCommand
-            label="Termux (Android) · build from source"
-            command={`pkg install -y rust clang git && git clone --depth 1 https://github.com/kevilevi07/flippy.git && cd flippy/terminal && cargo build --release && ./target/release/trupx`}
+            label="Termux (Android, arm64)"
+            command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-termux-aarch64 -o trupx && chmod +x trupx && ./trupx`}
           />
 
           <div style={{ marginTop: "1.75rem", opacity: 0.65, fontSize: "0.9rem" }}>
