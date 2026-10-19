@@ -542,9 +542,10 @@ WshShell.Run Chr(34) & "{bat}" & Chr(34), 0, False
 
     #[cfg(not(windows))]
     {
-        // Remove PATH line from any shell rc we might have touched.
         if let Some(home) = std::env::var_os("HOME") {
             let home = std::path::PathBuf::from(home);
+
+            // Strip PATH entries from every rc we might have touched.
             for name in [".bashrc", ".zshrc", ".profile", ".bash_profile"] {
                 let rc = home.join(name);
                 if let Ok(contents) = fs::read_to_string(&rc) {
@@ -556,12 +557,27 @@ WshShell.Run Chr(34) & "{bat}" & Chr(34), 0, False
                     let _ = fs::write(&rc, if new.is_empty() { String::new() } else { format!("{}\n", new) });
                 }
             }
-            // Fish shell config is a separate file layout; strip there too.
             let fish = home.join(".config").join("fish").join("config.fish");
             if let Ok(c) = fs::read_to_string(&fish) {
                 let filtered: Vec<&str> = c.lines().filter(|l| !l.contains(".trupx/bin")).collect();
                 let _ = fs::write(&fish, format!("{}\n", filtered.join("\n")));
             }
+
+            // systemd user service — disable + stop + remove.
+            let unit = home.join(".config").join("systemd").join("user").join("trupx.service");
+            if unit.exists() {
+                let _ = std::process::Command::new("systemctl")
+                    .args(["--user", "disable", "--now", "trupx.service"])
+                    .status();
+                let _ = fs::remove_file(&unit);
+                let _ = std::process::Command::new("systemctl")
+                    .args(["--user", "daemon-reload"])
+                    .status();
+            }
+
+            // Termux:Boot script.
+            let boot = home.join(".termux").join("boot").join("trupx");
+            let _ = fs::remove_file(&boot);
         }
 
         // Delete the install directory (binary) and the config directory.

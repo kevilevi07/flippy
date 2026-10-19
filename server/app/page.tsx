@@ -14,14 +14,14 @@ export default async function Home() {
         <div className="brand">trupx</div>
       </nav>
 
-      <div className="container" style={{ maxWidth: 420, marginTop: "2rem" }}>
-        <div className="card">
-          <h1 style={{ marginTop: 0 }}>Admin login</h1>
+      <div className="login-wrap">
+        <div className="login-card">
+          <h1>Admin login</h1>
           {!isAdminConfigured() && (
-            <p style={{ color: "#ff6b6b", fontSize: "0.9rem" }}>
-              <code>ADMIN_USERNAME</code> + <code>ADMIN_PASSWORD</code> env vars
-              are not set. Set them in your Vercel project and redeploy.
-            </p>
+            <div className="err">
+              <code>ADMIN_USERNAME</code> + <code>ADMIN_PASSWORD</code> env vars are not set.
+              Configure them in your Vercel project and redeploy.
+            </div>
           )}
           <LoginForm />
         </div>

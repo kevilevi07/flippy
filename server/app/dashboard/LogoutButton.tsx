@@ -9,15 +9,8 @@ export default function LogoutButton() {
     <button
       type="button"
       onClick={onClick}
-      style={{
-        padding: "0.4rem 0.9rem",
-        borderRadius: 6,
-        border: "1px solid #333",
-        background: "transparent",
-        color: "#eee",
-        fontSize: "0.9rem",
-        cursor: "pointer",
-      }}
+      className="btn-ghost"
+      style={{ fontSize: "0.9rem" }}
     >
       Log out
     </button>
