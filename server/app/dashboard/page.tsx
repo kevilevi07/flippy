@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { isAdmin } from "@/lib/admin";
 import { listLiveTunnels } from "@/lib/tunnels";
 import LogoutButton from "./LogoutButton";
+import CopyCommand from "./CopyCommand";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,8 +72,31 @@ export default async function Dashboard() {
               </tbody>
             </table>
           )}
-          <pre className="block" style={{ marginTop: "1.5rem", fontSize: "0.85rem" }}>{`trupx login --server ${base || "https://trupx.vercel.app"} --token <CLI_TOKEN>
-trupx start myapp`}</pre>
+        </div>
+
+        <div className="card" style={{ marginTop: "1.5rem" }}>
+          <h2 style={{ marginTop: 0 }}>Install trupx</h2>
+          <p style={{ opacity: 0.65, marginTop: 0, fontSize: "0.9rem" }}>
+            One-liner. Downloads the binary, puts it on PATH, and starts a tunnel in the background.
+          </p>
+
+          <CopyCommand
+            label="Windows · PowerShell"
+            command={`iwr ${base || "https://trupx.vercel.app"}/install.ps1 -useb | iex`}
+          />
+          <CopyCommand
+            label="Linux · macOS"
+            command={`curl -sSL ${base || "https://trupx.vercel.app"}/install.sh | sh`}
+          />
+          <CopyCommand
+            label="Termux (Android)"
+            command={`pkg install -y curl && curl -sSL ${base || "https://trupx.vercel.app"}/install.sh | sh`}
+          />
+
+          <div style={{ marginTop: "1.75rem", opacity: 0.65, fontSize: "0.9rem" }}>
+            After install, open a new terminal and type <code>trupx</code> to start a tunnel.
+            Use <code>trupx uninstall</code> to remove.
+          </div>
         </div>
       </div>
     </>
