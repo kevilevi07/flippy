@@ -23,6 +23,29 @@ enum WsCmd {
     Close,
 }
 
+/// Current system hostname, lowercased.
+#[cfg(windows)]
+fn get_hostname() -> String {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+#[cfg(unix)]
+fn get_hostname() -> String {
+    let mut buf = [0u8; 256];
+    let r = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+    if r != 0 {
+        return std::env::var("HOSTNAME").unwrap_or_default();
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..end])
+        .trim()
+        .to_ascii_lowercase()
+}
+
 /// Resolve a hostname by trying, in order:
 ///   1. DNS-over-HTTPS to Cloudflare (443/TCP) — survives networks that
 ///      block UDP/53 or alt DNS servers (Termux on mobile carriers, corporate
@@ -132,12 +155,7 @@ async fn one_session(
             u.query_pairs_mut().append_pair("name", id);
         }
         // Always send the hostname for admin-panel identification.
-        let host = std::env::var("COMPUTERNAME")
-            .or_else(|_| std::env::var("HOSTNAME"))
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| s.trim().to_ascii_lowercase())
-            .unwrap_or_default();
+        let host = get_hostname();
         if !host.is_empty() {
             u.query_pairs_mut().append_pair("hostname", &host);
         }

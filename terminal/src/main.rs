@@ -123,12 +123,22 @@ fn main() {
             std::process::exit(1);
         }
 
-        // Windows: respawn self as a detached child so the user's shell is freed.
-        #[cfg(windows)]
+        // Unix: self-install into ~/.trupx/bin/trupx + patch shell rc BEFORE
+        // we detach so the install messages reach the user's current shell.
+        #[cfg(not(windows))]
         {
-            detach_and_exit(&cli);
+            let installed_now = self_install_unix();
+            if installed_now {
+                println!(
+                    "trupx installed to ~/.trupx/bin/trupx — open a new shell to use `trupx`."
+                );
+            }
         }
-        // Unix: fall through, run server in foreground.
+
+        // Both Windows and Unix: respawn self as a detached background
+        // process so the user's shell is freed. The child reruns with the
+        // hidden `daemon` subcommand.
+        detach_and_exit(&cli);
     }
 
     let (user, pass) = match cli.credential.split_once(':') {
@@ -166,17 +176,9 @@ fn main() {
     #[cfg(not(windows))]
     let banner_shell = shell.clone();
 
-    // Unix: silent startup. On first run (binary isn't yet at the install
-    // location), self-install to ~/.trupx/bin/trupx and append PATH to the
-    // user's shell rc. Subsequent runs skip this.
     #[cfg(not(windows))]
     {
         let _ = (banner_user, banner_shell);
-        let installed_now = self_install_unix();
-        if installed_now {
-            println!("trupx installed to ~/.trupx/bin/trupx — open a new shell to use `trupx`.");
-            println!("Running… (Ctrl+C to stop)");
-        }
     }
 
     rt.block_on(async move {
@@ -299,15 +301,30 @@ fn self_install_unix() -> bool {
     true
 }
 
+#[cfg(windows)]
+fn system_hostname_raw() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok().filter(|s| !s.trim().is_empty())
+}
+
+#[cfg(unix)]
+fn system_hostname_raw() -> Option<String> {
+    let mut buf = [0u8; 256];
+    let r = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+    if r != 0 {
+        return std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty());
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let s = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
 /// Build a valid tunnel name from the system hostname.
 /// Valid = 2-32 chars, [a-z0-9-], start/end alphanumeric. Falls back to a
 /// short random id if the hostname can't be derived.
+#[allow(dead_code)]
 fn default_tunnel_name() -> String {
     use rand::{distributions::Alphanumeric, Rng};
-    let raw = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .ok()
-        .filter(|s| !s.trim().is_empty());
+    let raw = system_hostname_raw();
     if let Some(h) = raw {
         // Normalize: lowercase, replace non-[a-z0-9-] with '-', trim '-' edges,
         // collapse runs, truncate to 32.
@@ -574,17 +591,8 @@ fn cmd_logout() -> i32 {
     }
 }
 
-/// Spawn self detached (no console) with the same flags + the hidden `daemon`
-/// subcommand, then exit the foreground process.
-#[cfg(windows)]
-fn detach_and_exit(cli: &Cli) -> ! {
-    use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-
-    let exe = std::env::current_exe().expect("current_exe");
-    let mut cmd = std::process::Command::new(&exe);
+fn build_daemon_cmd(cli: &Cli, exe: &std::path::Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(exe);
     cmd.arg("-p").arg(cli.port.to_string());
     cmd.arg("-c").arg(&cli.credential);
     if let Some(sh) = &cli.shell {
@@ -600,15 +608,64 @@ fn detach_and_exit(cli: &Cli) -> ! {
         cmd.arg("--server").arg(s);
     }
     cmd.arg("daemon");
-    cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
+    cmd
+}
+
+/// Spawn self detached (no console) with the same flags + the hidden `daemon`
+/// subcommand, then exit the foreground process.
+#[cfg(windows)]
+fn detach_and_exit(cli: &Cli) -> ! {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+    let exe = std::env::current_exe().expect("current_exe");
+    let mut cmd = build_daemon_cmd(cli, &exe);
+    cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     match cmd.spawn() {
         Ok(_child) => {
-            // Silent: don't echo pid or URL. The admin can see the public URL
-            // in the dashboard (identified by hostname), and the local
-            // terminal is always http://localhost:8090.
+            let _ = std::io::stdout().flush();
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("failed to launch background trupx: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Unix equivalent: fork via spawn + call `setsid()` in the child so it
+/// detaches from the parent's TTY and keeps running after we exit.
+#[cfg(not(windows))]
+fn detach_and_exit(cli: &Cli) -> ! {
+    use std::os::unix::process::CommandExt;
+
+    // Prefer the installed copy so the daemon survives if the user deletes
+    // the ./trupx they downloaded.
+    let exe = {
+        let installed = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .map(|h| h.join(".trupx").join("bin").join("trupx"));
+        match installed {
+            Some(p) if p.exists() => p,
+            _ => std::env::current_exe().expect("current_exe"),
+        }
+    };
+
+    let mut cmd = build_daemon_cmd(cli, &exe);
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    match cmd.spawn() {
+        Ok(_child) => {
+            println!("trupx is running in background. Use `trupx stop` to stop.");
             let _ = std::io::stdout().flush();
             std::process::exit(0);
         }
