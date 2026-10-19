@@ -323,6 +323,7 @@ fn cmd_login(token: Option<String>, server_override: Option<String>) -> i32 {
 
 fn cmd_uninstall() -> i32 {
     use std::io::{self, Write};
+    use rand::Rng;
 
     print!("Password: ");
     let _ = io::stdout().flush();
@@ -333,24 +334,23 @@ fn cmd_uninstall() -> i32 {
         return 1;
     }
 
-    // Stop any running daemon so files/registry can be freed.
+    // Stop any running daemon.
     let (_killed, _pid) = terminal::kill_running();
 
-    // Config dir — removable while we're still running.
+    // Config dir (safe to delete while we run).
     if let Ok(cfg) = config::path() {
         if let Some(parent) = cfg.parent() {
             let _ = fs::remove_dir_all(parent);
         }
     }
 
-    // Install dir (where this exe lives) — can't be removed while running.
     let install_dir = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(|p| p.to_path_buf()));
 
     #[cfg(windows)]
     {
-        // Remove the WindowsApps shim immediately.
+        // Remove the WindowsApps shim NOW so `trupx` disappears from PATH immediately.
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
             let shim = std::path::PathBuf::from(local)
                 .join("Microsoft")
@@ -359,32 +359,70 @@ fn cmd_uninstall() -> i32 {
             let _ = fs::remove_file(&shim);
         }
 
-        // Schedule deferred cleanup via a detached cmd: wait a couple of
-        // seconds for us to exit, then nuke the install dir and prune PATH.
-        if let Some(dir) = install_dir {
-            use std::os::windows::process::CommandExt;
-            const DETACHED_PROCESS: u32 = 0x0000_0008;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            // Parent of install_dir is likely %USERPROFILE%\.trupx — remove that whole folder.
-            let user_root = dir.parent().map(|p| p.to_path_buf()).unwrap_or(dir.clone());
-            let ps = format!(
-                "Start-Sleep -Seconds 2; \
-                 Remove-Item -Recurse -Force '{}' -ErrorAction SilentlyContinue; \
-                 try {{ \
-                   $p = (Get-ItemProperty 'HKCU:\\Environment' -Name PATH).PATH; \
-                   $parts = $p -split ';' | Where-Object {{ $_ -and $_ -notlike '*\\.trupx\\bin*' }}; \
-                   Set-ItemProperty 'HKCU:\\Environment' -Name PATH -Value ($parts -join ';') -Force \
-                 }} catch {{}}",
-                user_root.display()
-            );
-            let _ = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
-                .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
-        }
+        // Build a self-contained cleanup .bat in %TEMP% that:
+        //   1. Waits for us to exit
+        //   2. Deletes the install dir (where our exe lives)
+        //   3. Strips .trupx\bin from the user PATH via `reg` (works in CLM)
+        //   4. Logs its actions to %TEMP%\trupx-uninstall.log
+        //   5. Deletes itself
+        let user_root = install_dir
+            .as_ref()
+            .and_then(|d| d.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(
+                    std::env::var_os("USERPROFILE").unwrap_or_default(),
+                )
+                .join(".trupx")
+            });
+
+        let temp = std::env::temp_dir();
+        let bat_path = temp.join(format!(
+            "trupx-uninstall-{}.bat",
+            rand::thread_rng().gen::<u32>()
+        ));
+        let log_path = temp.join("trupx-uninstall.log");
+
+        let bat = format!(
+r#"@echo off
+echo [%date% %time%] uninstall script started > "{log}"
+timeout /t 3 /nobreak >nul 2>&1
+
+echo [%date% %time%] killing residual trupx >> "{log}"
+taskkill /F /IM trupx.exe >nul 2>&1
+
+echo [%date% %time%] removing shim >> "{log}"
+del /F /Q "%LOCALAPPDATA%\Microsoft\WindowsApps\trupx.cmd" >nul 2>&1
+
+echo [%date% %time%] removing install dir >> "{log}"
+rmdir /S /Q "{root}" >> "{log}" 2>&1
+
+echo [%date% %time%] removing config dir >> "{log}"
+rmdir /S /Q "%APPDATA%\trupx" >nul 2>&1
+
+echo [%date% %time%] pruning PATH >> "{log}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try {{ $p = (Get-ItemProperty 'HKCU:\Environment' -Name PATH -ErrorAction SilentlyContinue).PATH; if ($p) {{ $parts = $p -split ';' ^| Where-Object {{ $_ -and ($_ -notlike '*\.trupx\bin*') -and ($_ -notlike '*/.trupx/bin*') }}; $new = $parts -join ';'; Set-ItemProperty 'HKCU:\Environment' -Name PATH -Value $new -Force; Write-Output ('PATH after: ' + $new) }} else {{ Write-Output 'no PATH set' }} }} catch {{ Write-Output ('path edit failed: ' + $_.Exception.Message) }}" >> "{log}" 2>&1
+
+echo [%date% %time%] done >> "{log}"
+del "%~f0" >nul 2>&1
+"#,
+            log = log_path.display(),
+            root = user_root.display(),
+        );
+        let _ = fs::write(&bat_path, bat);
+
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", bat_path.to_string_lossy().as_ref()])
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        println!("trupx uninstalling in background...");
+        println!("Log: {}", log_path.display());
     }
 
     #[cfg(not(windows))]
@@ -394,9 +432,9 @@ fn cmd_uninstall() -> i32 {
                 let _ = fs::remove_dir_all(parent); // ~/.trupx
             }
         }
+        println!("trupx uninstalled.");
     }
 
-    println!("trupx uninstalled.");
     0
 }
 
