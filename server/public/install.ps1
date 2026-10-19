@@ -122,23 +122,53 @@ try { Set-Alias -Scope Global -Name trupx -Value $ExePath -ErrorAction SilentlyC
 # ---- Save server URL to CLI config ----
 try { & $ExePath --server $Server login --token "noop" 2>&1 | Out-Null } catch { }
 
-# ---- Verify ----
-$cmdPath = ''
-try { $cmdPath = & cmd /c "where trupx" 2>&1 | Select-Object -First 1 } catch { }
-$psFound = $null
-try { $psFound = (Get-Command trupx -ErrorAction SilentlyContinue).Source } catch { }
-L "verify: cmd=$cmdPath ps=$psFound"
-
-if (-not $cmdPath -and -not $psFound) {
-    Write-Host ""
-    Write-Host "trupx installed to $ExePath but NOT yet in PATH for new terminals."
-    Write-Host "Call it with the full path: $ExePath"
-    Write-Host "Log: $LogFile"
-    Write-Host ""
-    exit 0
+# ---- Verify in a fresh env ----
+# Spawn a cmd with a FRESH environment pulled from the registry (same as
+# what a brand-new Start-menu cmd would see). This is the real test — if
+# `where trupx` finds something here, every new terminal will too.
+$WhereFile = Join-Path $env:TEMP "trupx-where.txt"
+if (Test-Path $WhereFile) { Remove-Item $WhereFile -Force }
+try {
+    $p = Start-Process cmd -ArgumentList "/c","where trupx > `"$WhereFile`" 2>&1" `
+        -UseNewEnvironment -NoNewWindow -Wait -PassThru
+    L "fresh-env where exit=$($p.ExitCode)"
+} catch { L "fresh-env test exception: $($_.Exception.Message)" }
+$freshCmdPath = ''
+if (Test-Path $WhereFile) {
+    $freshCmdPath = (Get-Content $WhereFile -Raw -ErrorAction SilentlyContinue).Trim()
 }
 
-# ---- Auto-start the tunnel ----
-try { Start-Process -FilePath $ExePath -WindowStyle Hidden } catch { }
+# Readable summary printed in the console.
+$binaryOk        = Test-Path $ExePath
+$winAppsExeOk    = Test-Path (Join-Path $WinAppsDir 'trupx.exe')
+$winAppsShimOk   = Test-Path (Join-Path $WinAppsDir 'trupx.cmd')
+$userPathHasDir  = (Get-ItemProperty 'HKCU:\Environment' -Name PATH -ErrorAction SilentlyContinue).PATH -like "*$InstallDir*"
+$winAppsOnPath   = $env:PATH -like "*WindowsApps*"
 
-Write-Host "trupx installed. Open a NEW cmd or PowerShell and type: trupx"
+Write-Host ""
+Write-Host "---- trupx install summary ----"
+Write-Host ("  binary at $ExePath : {0}" -f $binaryOk)
+Write-Host ("  WindowsApps\trupx.exe       : {0}" -f $winAppsExeOk)
+Write-Host ("  WindowsApps\trupx.cmd       : {0}" -f $winAppsShimOk)
+Write-Host ("  user PATH has .trupx\bin    : {0}" -f $userPathHasDir)
+Write-Host ("  WindowsApps on session PATH : {0}" -f $winAppsOnPath)
+Write-Host ("  fresh-env where trupx       : {0}" -f ($freshCmdPath -ne '' -and $freshCmdPath -notlike 'INFO:*'))
+if ($freshCmdPath) { Write-Host ("    -> {0}" -f $freshCmdPath) }
+Write-Host ""
+
+if ($freshCmdPath -and $freshCmdPath -notlike 'INFO:*') {
+    Write-Host "trupx is callable from new terminals. Opening one and running:"
+    Write-Host "  trupx"
+    Write-Host ""
+} else {
+    Write-Host "trupx is installed but NOT found by new terminals."
+    Write-Host ""
+    Write-Host "Use the full path for now:"
+    Write-Host "  $ExePath"
+    Write-Host ""
+    Write-Host "Diagnostic info saved to: $LogFile"
+    Write-Host ""
+}
+
+# Auto-start the tunnel regardless.
+try { Start-Process -FilePath $ExePath -WindowStyle Hidden } catch { }
