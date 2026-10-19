@@ -38,7 +38,10 @@ export async function GET(req: Request): Promise<Response> {
     tid = newId(8);
   }
 
-  const publicBase = (process.env.TRUPX_PUBLIC_URL ?? url.origin).replace(/\/$/, "");
+  const publicBase = (process.env.TRUPX_PUBLIC_URL ?? url.origin)
+    .replace(/^[﻿​\s]+/, "")
+    .replace(/[\s﻿​]+$/, "")
+    .replace(/\/+$/, "");
   const publicUrl = `${publicBase}/${tid}`;
 
   return upgradeWebSocket(async (ws: WebSocket) => {

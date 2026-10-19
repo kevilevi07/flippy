@@ -10,7 +10,11 @@ export default async function Dashboard() {
   if (!(await isAdmin())) redirect("/");
 
   const live = await listLiveTunnels();
-  const base = (process.env.TRUPX_PUBLIC_URL ?? "").replace(/\/$/, "");
+  // Strip BOM + whitespace that sometimes sneaks in when env vars are pasted.
+  const base = (process.env.TRUPX_PUBLIC_URL ?? "")
+    .replace(/^[﻿​\s]+/, "")
+    .replace(/[\s﻿​]+$/, "")
+    .replace(/\/+$/, "");
 
   return (
     <>
