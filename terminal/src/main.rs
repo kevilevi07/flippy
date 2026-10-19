@@ -34,13 +34,18 @@ struct Cli {
     #[arg(long = "tunnel")]
     tunnel: bool,
 
-    /// Tunnel app name (3-32 chars, a-z 0-9 and -). If omitted, server assigns one.
+    /// Tunnel app name (3-32 chars, a-z 0-9 and -). If omitted, uses the
+    /// system hostname. Also accepted as a positional: `trupx sherlock`.
     #[arg(long = "name")]
     tunnel_name: Option<String>,
 
     /// Override the saved tunnel server URL for this run.
     #[arg(long = "server")]
     tunnel_server: Option<String>,
+
+    /// Positional tunnel name — same as `--name`. Lets you type `trupx sherlock`.
+    #[arg()]
+    positional_name: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -77,6 +82,21 @@ fn main() {
         cli.tunnel = true;
         if n.is_some() { cli.tunnel_name = n; }
         cli.command = None;
+    }
+
+    // `trupx <name>` (positional) is sugar for `--tunnel --name <name>`.
+    if let Some(n) = cli.positional_name.take() {
+        cli.tunnel = true;
+        if cli.tunnel_name.is_none() { cli.tunnel_name = Some(n); }
+    }
+
+    // Zero-arg: `trupx` by itself always opens a tunnel too.
+    // Default name = system hostname; falls back to a random id.
+    if cli.command.is_none() && !is_daemon {
+        cli.tunnel = true;
+        if cli.tunnel_name.is_none() {
+            cli.tunnel_name = Some(default_tunnel_name());
+        }
     }
 
     // Non-server subcommands run and exit immediately.
@@ -203,6 +223,39 @@ fn main() {
     });
 }
 
+/// Build a valid tunnel name from the system hostname.
+/// Valid = 2-32 chars, [a-z0-9-], start/end alphanumeric. Falls back to a
+/// short random id if the hostname can't be derived.
+fn default_tunnel_name() -> String {
+    use rand::{distributions::Alphanumeric, Rng};
+    let raw = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    if let Some(h) = raw {
+        // Normalize: lowercase, replace non-[a-z0-9-] with '-', trim '-' edges,
+        // collapse runs, truncate to 32.
+        let mut s: String = h
+            .to_ascii_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+            .collect();
+        while s.contains("--") { s = s.replace("--", "-"); }
+        let s = s.trim_matches('-').to_string();
+        let s: String = s.chars().take(32).collect();
+        if s.len() >= 2 && s.chars().next().map_or(false, |c| c.is_ascii_alphanumeric()) {
+            return s;
+        }
+    }
+    // Fallback: short random id.
+    let suffix: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(6)
+        .map(|c| (c as char).to_ascii_lowercase())
+        .collect();
+    format!("trupx-{}", suffix)
+}
+
 fn cmd_stop() -> i32 {
     let (killed, pid) = terminal::kill_running();
     terminal::append_log(&format!("stop requested, pid={:?}, killed={}", pid, killed));
@@ -318,7 +371,17 @@ fn detach_and_exit(cli: &Cli) -> ! {
         Ok(child) => {
             println!("trupx started in background (pid {}).", child.id());
             if cli.tunnel {
-                println!("tunnel: see https://<your-trupx-server>/dashboard for the public URL");
+                // Best-effort: tell the user the public URL we expect.
+                let server = cli.tunnel_server.clone().or_else(|| {
+                    config::Config::load().ok().and_then(|c| c.server)
+                }).unwrap_or_else(|| "https://trupx.vercel.app".to_string());
+                let server = server.trim_end_matches('/').to_string();
+                let name = cli.tunnel_name.clone().unwrap_or_default();
+                if !name.is_empty() {
+                    println!("public URL: {}/{}/", server, name);
+                } else {
+                    println!("public URL will appear in {}/dashboard", server);
+                }
             }
             let _ = std::io::stdout().flush();
             std::process::exit(0);

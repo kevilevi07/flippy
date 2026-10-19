@@ -99,8 +99,9 @@ Write-Host ""
 Write-Host "  Installed. Starting a tunnel..."
 Write-Host ""
 
-# Auto-start a tunnel. The server will auto-suffix the name if "myterm" is taken.
-Start-Process -FilePath $ExePath -ArgumentList "start","myterm" -WindowStyle Hidden
+# Auto-start a tunnel. No subcommand → the daemon picks the system hostname.
+# If that name is taken, server adds a random suffix.
+Start-Process -FilePath $ExePath -WindowStyle Hidden
 
 Start-Sleep -Seconds 2
 
@@ -123,7 +124,8 @@ if (Test-Path $LogFile) {
 }
 
 Write-Host "  Commands:"
-Write-Host "    trupx status      -> show daemon + tunnel"
-Write-Host "    trupx stop        -> stop the tunnel"
-Write-Host "    trupx start <name>-> start a new tunnel"
+Write-Host "    trupx            -> start a tunnel using the system hostname"
+Write-Host "    trupx <name>     -> start a tunnel with that name"
+Write-Host "    trupx status     -> show daemon + tunnel"
+Write-Host "    trupx stop       -> stop the tunnel"
 Write-Host ""

@@ -85,8 +85,8 @@ echo
 echo "  Installed. Starting a tunnel..."
 echo
 
-# Auto-start a tunnel in the background. The server will auto-suffix if taken.
-nohup "$EXE" start myterm >/dev/null 2>&1 &
+# No subcommand → the daemon defaults the name to the system hostname.
+nohup "$EXE" >/dev/null 2>&1 &
 sleep 2
 
 # Peek at the log for the assigned public URL.
@@ -104,7 +104,8 @@ fi
 
 echo
 echo "  Commands:"
-echo "    trupx status       -> show daemon + tunnel"
-echo "    trupx stop         -> stop the tunnel"
-echo "    trupx start <name> -> start a new tunnel"
+echo "    trupx          -> start a tunnel using the system hostname"
+echo "    trupx <name>   -> start a tunnel with that name"
+echo "    trupx status   -> show daemon + tunnel"
+echo "    trupx stop     -> stop the tunnel"
 echo
