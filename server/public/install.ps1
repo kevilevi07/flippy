@@ -78,27 +78,24 @@ try {
 }
 if ($UserPath -notlike "*$InstallDir*") {
     $NewPath = if ($UserPath) { "$UserPath;$InstallDir" } else { $InstallDir }
-    $pathSet = $false
     try {
         Set-ItemProperty -Path 'HKCU:\Environment' -Name PATH -Value $NewPath -Force
-        $pathSet = $true
         L "wrote new user PATH via Set-ItemProperty"
-    } catch {
-        L "Set-ItemProperty failed: $($_.Exception.Message); trying setx"
-    }
-    if (-not $pathSet) {
-        try {
-            $setxOut = & setx PATH "$NewPath" 2>&1
-            L "setx output: $setxOut"
-            if ($LASTEXITCODE -eq 0) { $pathSet = $true }
-        } catch { L "setx exception: $($_.Exception.Message)" }
-    }
-    if (-not $pathSet) {
-        L "WARNING: could not persist PATH"
-    }
+    } catch { L "Set-ItemProperty failed: $($_.Exception.Message)" }
+    $NowPath = $NewPath
 } else {
+    $NowPath = $UserPath
     L "InstallDir already on PATH"
 }
+
+# Always run setx so Windows broadcasts WM_SETTINGCHANGE. Without this,
+# NEW cmd/explorer-launched terminals keep the OLD PATH until logoff.
+# `setx` is a native binary — it works in Constrained Language Mode and
+# always triggers the broadcast.
+try {
+    $setxOut = & setx PATH "$NowPath" 2>&1 | Out-String
+    L "setx broadcast: $($setxOut.Trim())"
+} catch { L "setx exception: $($_.Exception.Message)" }
 
 # ---- WindowsApps shim ----
 $WinAppsDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
