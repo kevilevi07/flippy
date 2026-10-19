@@ -75,27 +75,39 @@ export default async function Dashboard() {
         </div>
 
         <div className="card" style={{ marginTop: "1.5rem" }}>
-          <h2 style={{ marginTop: 0 }}>Install trupx</h2>
+          <h2 style={{ marginTop: 0 }}>Download trupx</h2>
           <p style={{ opacity: 0.65, marginTop: 0, fontSize: "0.9rem" }}>
-            One-liner. Downloads the binary, puts it on PATH, and starts a tunnel in the background.
+            One binary, no install. Download, mark executable, run — just like ngrok.
           </p>
 
           <CopyCommand
-            label="Windows · PowerShell"
+            label="Windows · PowerShell (full install with PATH + autostart)"
             command={`iwr ${base || "https://trupx.vercel.app"}/install.ps1 -useb | iex`}
           />
           <CopyCommand
-            label="Linux · macOS"
-            command={`curl -sSL ${base || "https://trupx.vercel.app"}/install.sh | sh`}
+            label="Linux x64"
+            command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-linux-x64 -o trupx && chmod +x trupx && ./trupx`}
           />
           <CopyCommand
-            label="Termux (Android)"
-            command={`pkg install -y curl && curl -sSL ${base || "https://trupx.vercel.app"}/install.sh | sh`}
+            label="Linux arm64"
+            command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-linux-aarch64 -o trupx && chmod +x trupx && ./trupx`}
+          />
+          <CopyCommand
+            label="macOS Intel"
+            command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-darwin-x64 -o trupx && chmod +x trupx && ./trupx`}
+          />
+          <CopyCommand
+            label="macOS Apple Silicon"
+            command={`curl -fsSL ${base || "https://trupx.vercel.app"}/trupx-darwin-aarch64 -o trupx && chmod +x trupx && ./trupx`}
+          />
+          <CopyCommand
+            label="Termux (Android) · build from source"
+            command={`pkg install -y rust clang git && git clone --depth 1 https://github.com/kevilevi07/flippy.git && cd flippy/terminal && cargo build --release && ./target/release/trupx`}
           />
 
           <div style={{ marginTop: "1.75rem", opacity: 0.65, fontSize: "0.9rem" }}>
-            After install, open a new terminal and type <code>trupx</code> to start a tunnel.
-            Use <code>trupx uninstall</code> to remove.
+            Each command downloads the binary, makes it executable, and runs it.
+            The tunnel starts and the public URL appears in this dashboard.
           </div>
         </div>
       </div>
