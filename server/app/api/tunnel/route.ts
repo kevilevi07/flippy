@@ -23,21 +23,16 @@ export async function GET(req: Request): Promise<Response> {
 
   let tid: string;
   if (requested) {
-    if (!isValidName(requested)) {
-      // Rather than reject, strip to a valid stem and auto-suffix.
-      const stem = requested
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, "")
-        .replace(/^-+|-+$/g, "");
-      tid = `${stem || "term"}-${newId(4)}`;
+    const name: string = String(requested);
+    const stem = name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "")
+      .replace(/^-+|-+$/g, "");
+    if (isValidName(name)) {
+      const existing = await kv.get(keys.tunnel(name));
+      tid = existing ? `${name}-${newId(4)}` : name;
     } else {
-      const existing = await kv.get(keys.tunnel(requested));
-      if (existing) {
-        // Name is live — add a short random suffix so the user still gets a URL.
-        tid = `${requested}-${newId(4)}`;
-      } else {
-        tid = requested;
-      }
+      tid = `${stem || "term"}-${newId(4)}`;
     }
   } else {
     tid = newId(8);
