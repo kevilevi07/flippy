@@ -22,20 +22,34 @@ function p(): Pool {
   return _p;
 }
 
-export type LiveTunnel = { name: string; expires_at: string | null };
+export type LiveTunnel = {
+  name: string;
+  hostname: string;
+  expires_at: string | null;
+};
 
 export async function listLiveTunnels(): Promise<LiveTunnel[]> {
   try {
-    const r = await p().query<{ k: string; expires_at: string | null }>(
-      `SELECT k, expires_at FROM kv
+    const r = await p().query<{ k: string; v: string | null; expires_at: string | null }>(
+      `SELECT k, v, expires_at FROM kv
        WHERE k LIKE 'tunnel:%'
          AND (expires_at IS NULL OR expires_at > now())
        ORDER BY k`,
     );
-    return r.rows.map((row) => ({
-      name: row.k.replace(/^tunnel:/, ""),
-      expires_at: row.expires_at,
-    }));
+    return r.rows.map((row) => {
+      let hostname = "";
+      try {
+        if (row.v && row.v.startsWith("{")) {
+          const obj = JSON.parse(row.v) as { hostname?: string };
+          hostname = (obj.hostname ?? "").trim();
+        }
+      } catch { /* legacy "1" record — no hostname */ }
+      return {
+        name: row.k.replace(/^tunnel:/, ""),
+        hostname,
+        expires_at: row.expires_at,
+      };
+    });
   } catch {
     return [];
   }

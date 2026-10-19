@@ -131,6 +131,16 @@ async fn one_session(
         if let Some(id) = reuse_id {
             u.query_pairs_mut().append_pair("name", id);
         }
+        // Always send the hostname for admin-panel identification.
+        let host = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        if !host.is_empty() {
+            u.query_pairs_mut().append_pair("hostname", &host);
+        }
         u
     };
 

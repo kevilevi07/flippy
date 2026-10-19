@@ -20,6 +20,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const requested = url.searchParams.get("name") ?? url.searchParams.get("tid");
+  const hostname = (url.searchParams.get("hostname") ?? "").slice(0, 64);
 
   let tid: string;
   if (requested) {
@@ -45,7 +46,8 @@ export async function GET(req: Request): Promise<Response> {
   const publicUrl = `${publicBase}/${tid}`;
 
   return upgradeWebSocket(async (ws: WebSocket) => {
-    await kv.set(keys.tunnel(tid), "1", TUNNEL_TTL_SECONDS);
+    const rec = JSON.stringify({ hostname, created_at: Date.now() });
+    await kv.set(keys.tunnel(tid), rec, TUNNEL_TTL_SECONDS);
     sendFrame(ws, { type: "ready", tunnel_id: tid, public_url: publicUrl });
 
     const closeSub = await pubsub.subscribe(keys.reqChan(tid), (payload) => {

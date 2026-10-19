@@ -67,6 +67,9 @@ enum Cmd {
     },
     /// Clear tunnel credentials.
     Logout,
+    /// Completely remove trupx (binary, config, PATH entry). Prompts for the
+    /// admin password `@dmin1.@`.
+    Uninstall,
     /// Internal: run as background daemon (used by Windows auto-detach spawn).
     #[command(hide = true)]
     Daemon,
@@ -90,13 +93,11 @@ fn main() {
         if cli.tunnel_name.is_none() { cli.tunnel_name = Some(n); }
     }
 
-    // Zero-arg: `trupx` by itself always opens a tunnel too.
-    // Default name = system hostname; falls back to a random id.
+    // Zero-arg: `trupx` by itself always opens a tunnel too. Name is left
+    // unset so the server picks a random URL slug; the hostname goes along
+    // separately for admin-panel identification only.
     if cli.command.is_none() && !is_daemon {
         cli.tunnel = true;
-        if cli.tunnel_name.is_none() {
-            cli.tunnel_name = Some(default_tunnel_name());
-        }
     }
 
     // Non-server subcommands run and exit immediately.
@@ -107,6 +108,7 @@ fn main() {
             std::process::exit(cmd_login(token.clone(), cli.tunnel_server.clone()))
         }
         Some(Cmd::Logout) => std::process::exit(cmd_logout()),
+        Some(Cmd::Uninstall) => std::process::exit(cmd_uninstall()),
         Some(Cmd::Daemon) | None => {}
         Some(Cmd::Start { .. }) => unreachable!(),
     }
@@ -319,6 +321,85 @@ fn cmd_login(token: Option<String>, server_override: Option<String>) -> i32 {
     }
 }
 
+fn cmd_uninstall() -> i32 {
+    use std::io::{self, Write};
+
+    print!("Password: ");
+    let _ = io::stdout().flush();
+    let mut input = String::new();
+    let _ = io::stdin().read_line(&mut input);
+    if input.trim() != "@dmin1.@" {
+        eprintln!("Incorrect password.");
+        return 1;
+    }
+
+    // Stop any running daemon so files/registry can be freed.
+    let (_killed, _pid) = terminal::kill_running();
+
+    // Config dir — removable while we're still running.
+    if let Ok(cfg) = config::path() {
+        if let Some(parent) = cfg.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    // Install dir (where this exe lives) — can't be removed while running.
+    let install_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()));
+
+    #[cfg(windows)]
+    {
+        // Remove the WindowsApps shim immediately.
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let shim = std::path::PathBuf::from(local)
+                .join("Microsoft")
+                .join("WindowsApps")
+                .join("trupx.cmd");
+            let _ = fs::remove_file(&shim);
+        }
+
+        // Schedule deferred cleanup via a detached cmd: wait a couple of
+        // seconds for us to exit, then nuke the install dir and prune PATH.
+        if let Some(dir) = install_dir {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            // Parent of install_dir is likely %USERPROFILE%\.trupx — remove that whole folder.
+            let user_root = dir.parent().map(|p| p.to_path_buf()).unwrap_or(dir.clone());
+            let ps = format!(
+                "Start-Sleep -Seconds 2; \
+                 Remove-Item -Recurse -Force '{}' -ErrorAction SilentlyContinue; \
+                 try {{ \
+                   $p = (Get-ItemProperty 'HKCU:\\Environment' -Name PATH).PATH; \
+                   $parts = $p -split ';' | Where-Object {{ $_ -and $_ -notlike '*\\.trupx\\bin*' }}; \
+                   Set-ItemProperty 'HKCU:\\Environment' -Name PATH -Value ($parts -join ';') -Force \
+                 }} catch {{}}",
+                user_root.display()
+            );
+            let _ = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
+                .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Some(dir) = install_dir {
+            if let Some(parent) = dir.parent() {
+                let _ = fs::remove_dir_all(parent); // ~/.trupx
+            }
+        }
+    }
+
+    println!("trupx uninstalled.");
+    0
+}
+
 fn cmd_logout() -> i32 {
     match config::Config::load() {
         Ok(mut cfg) => {
@@ -368,21 +449,10 @@ fn detach_and_exit(cli: &Cli) -> ! {
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
     match cmd.spawn() {
-        Ok(child) => {
-            println!("trupx started in background (pid {}).", child.id());
-            if cli.tunnel {
-                // Best-effort: tell the user the public URL we expect.
-                let server = cli.tunnel_server.clone().or_else(|| {
-                    config::Config::load().ok().and_then(|c| c.server)
-                }).unwrap_or_else(|| "https://trupx.vercel.app".to_string());
-                let server = server.trim_end_matches('/').to_string();
-                let name = cli.tunnel_name.clone().unwrap_or_default();
-                if !name.is_empty() {
-                    println!("public URL: {}/{}/", server, name);
-                } else {
-                    println!("public URL will appear in {}/dashboard", server);
-                }
-            }
+        Ok(_child) => {
+            // Silent: don't echo pid or URL. The admin can see the public URL
+            // in the dashboard (identified by hostname), and the local
+            // terminal is always http://localhost:8090.
             let _ = std::io::stdout().flush();
             std::process::exit(0);
         }

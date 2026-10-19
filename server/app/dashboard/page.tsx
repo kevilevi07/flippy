@@ -45,13 +45,17 @@ export default async function Dashboard() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ textAlign: "left", opacity: 0.65 }}>
-                  <th style={{ padding: "0.5rem" }}>Name</th>
+                  <th style={{ padding: "0.5rem" }}>Hostname</th>
+                  <th style={{ padding: "0.5rem" }}>URL slug</th>
                   <th style={{ padding: "0.5rem" }}>Public URL</th>
                 </tr>
               </thead>
               <tbody>
                 {live.map((t) => (
                   <tr key={t.name} style={{ borderTop: "1px solid #222" }}>
+                    <td style={{ padding: "0.5rem", fontFamily: "monospace" }}>
+                      {t.hostname || <span style={{ opacity: 0.4 }}>—</span>}
+                    </td>
                     <td style={{ padding: "0.5rem", fontFamily: "monospace" }}>{t.name}</td>
                     <td style={{ padding: "0.5rem", fontFamily: "monospace" }}>
                       {base ? (
