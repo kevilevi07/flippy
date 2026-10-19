@@ -216,11 +216,12 @@ async fn one_session(
                         let frame = Frame::decode(&txt).context("decoding frame")?;
                         match frame {
                             Frame::Ready { tunnel_id, public_url } => {
+                                // URL goes to the log file only — users look it
+                                // up on the admin dashboard, not in CLI output.
                                 crate::terminal::append_log(&format!(
                                     "tunnel READY: {} -> http://{}:{}",
                                     public_url, local_host, local_port
                                 ));
-                                println!("Forwarding {public_url}  ->  http://{local_host}:{local_port}");
                                 assigned = Some(tunnel_id);
                             }
                             Frame::Request { req_id, method, path, headers, body_b64 } => {

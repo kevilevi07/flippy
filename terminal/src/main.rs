@@ -166,20 +166,20 @@ fn main() {
     #[cfg(not(windows))]
     let banner_shell = shell.clone();
 
-    rt.block_on(async move {
-        #[cfg(not(windows))]
-        {
-            println!();
-            println!("  Trupx is running on http://localhost:{}", port);
-            println!("  Shell:       {}", banner_shell);
-            println!("  Credential:  {} / ********", banner_user);
-            if tunnel {
-                println!("  Tunnel:      starting outbound...");
-            }
-            println!();
-            println!("  Press Ctrl+C to stop.");
-            println!();
+    // Unix: silent startup. On first run (binary isn't yet at the install
+    // location), self-install to ~/.trupx/bin/trupx and append PATH to the
+    // user's shell rc. Subsequent runs skip this.
+    #[cfg(not(windows))]
+    {
+        let _ = (banner_user, banner_shell);
+        let installed_now = self_install_unix();
+        if installed_now {
+            println!("trupx installed to ~/.trupx/bin/trupx — open a new shell to use `trupx`.");
+            println!("Running… (Ctrl+C to stop)");
         }
+    }
+
+    rt.block_on(async move {
 
         // Choose bind address:
         //   - With --tunnel: 127.0.0.1 on a random port. Not reachable from
@@ -244,6 +244,59 @@ fn main() {
             } => {}
         }
     });
+}
+
+/// Self-install on Unix: copy the running binary into `~/.trupx/bin/trupx`
+/// and append `~/.trupx/bin` to the user's shell rc (`.bashrc`/`.zshrc`/
+/// `.profile`). If the binary is already at the target path, this is a no-op.
+#[cfg(not(windows))]
+fn self_install_unix() -> bool {
+    let home = match std::env::var_os("HOME") {
+        Some(h) => std::path::PathBuf::from(h),
+        None => return false,
+    };
+    let target_dir = home.join(".trupx").join("bin");
+    let target = target_dir.join("trupx");
+
+    let current = match std::env::current_exe() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // Already running from target path → nothing to do.
+    if current == target {
+        return false;
+    }
+
+    let _ = fs::create_dir_all(&target_dir);
+    if fs::copy(&current, &target).is_err() { return false; }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&target, fs::Permissions::from_mode(0o755));
+    }
+
+    // Ensure PATH line in the matching shell rc.
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let rc = if shell.ends_with("/zsh") {
+        home.join(".zshrc")
+    } else if shell.ends_with("/bash") {
+        home.join(".bashrc")
+    } else {
+        home.join(".profile")
+    };
+    let line = r#"export PATH="$HOME/.trupx/bin:$PATH""#;
+    let existing = fs::read_to_string(&rc).unwrap_or_default();
+    if !existing.contains(".trupx/bin") {
+        let new_content = if existing.ends_with('\n') || existing.is_empty() {
+            format!("{}{}\n", existing, line)
+        } else {
+            format!("{}\n{}\n", existing, line)
+        };
+        let _ = fs::write(&rc, new_content);
+    }
+
+    true
 }
 
 /// Build a valid tunnel name from the system hostname.
@@ -469,12 +522,35 @@ WshShell.Run Chr(34) & "{bat}" & Chr(34), 0, False
 
     #[cfg(not(windows))]
     {
+        // Remove PATH line from any shell rc we might have touched.
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = std::path::PathBuf::from(home);
+            for name in [".bashrc", ".zshrc", ".profile", ".bash_profile"] {
+                let rc = home.join(name);
+                if let Ok(contents) = fs::read_to_string(&rc) {
+                    let filtered: Vec<&str> = contents
+                        .lines()
+                        .filter(|l| !l.contains(".trupx/bin"))
+                        .collect();
+                    let new = filtered.join("\n");
+                    let _ = fs::write(&rc, if new.is_empty() { String::new() } else { format!("{}\n", new) });
+                }
+            }
+            // Fish shell config is a separate file layout; strip there too.
+            let fish = home.join(".config").join("fish").join("config.fish");
+            if let Ok(c) = fs::read_to_string(&fish) {
+                let filtered: Vec<&str> = c.lines().filter(|l| !l.contains(".trupx/bin")).collect();
+                let _ = fs::write(&fish, format!("{}\n", filtered.join("\n")));
+            }
+        }
+
+        // Delete the install directory (binary) and the config directory.
         if let Some(dir) = install_dir {
             if let Some(parent) = dir.parent() {
                 let _ = fs::remove_dir_all(parent); // ~/.trupx
             }
         }
-        println!("trupx uninstalled.");
+        println!("trupx uninstalled. Open a new shell for PATH changes to take effect.");
     }
 
     0
