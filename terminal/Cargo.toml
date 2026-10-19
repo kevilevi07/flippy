@@ -43,6 +43,7 @@ directories = "5"
 subtle = "2"
 rand = "0.8"
 sysinfo = "0.32"
+rpassword = "7"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }

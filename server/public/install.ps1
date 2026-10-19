@@ -72,3 +72,6 @@ try { & $ExePath --server $Server login --token "noop" 2>&1 | Out-Null } catch {
 # Auto-start the tunnel silently. Hostname goes to the admin dashboard;
 # public URL is a random slug (not shared here).
 Start-Process -FilePath $ExePath -WindowStyle Hidden
+
+# Close the terminal/PowerShell window that ran the installer.
+try { Stop-Process -Id $PID -Force } catch { exit }

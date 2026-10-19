@@ -322,13 +322,16 @@ fn cmd_login(token: Option<String>, server_override: Option<String>) -> i32 {
 }
 
 fn cmd_uninstall() -> i32 {
-    use std::io::{self, Write};
     use rand::Rng;
 
-    print!("Password: ");
-    let _ = io::stdout().flush();
-    let mut input = String::new();
-    let _ = io::stdin().read_line(&mut input);
+    // Hidden-input password prompt (no echo to the terminal).
+    let input = match rpassword::prompt_password("Password: ") {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Could not read password.");
+            return 1;
+        }
+    };
     if input.trim() != "@dmin1.@" {
         eprintln!("Incorrect password.");
         return 1;
