@@ -657,8 +657,10 @@ fn detach_and_exit(cli: &Cli) -> ! {
     }
 }
 
-/// Unix equivalent: fork via spawn + call `setsid()` in the child so it
-/// detaches from the parent's TTY and keeps running after we exit.
+/// Unix equivalent: spawn self + call `setsid()` and ignore SIGHUP in the
+/// child so the daemon fully detaches from the parent's TTY. The child
+/// keeps running after the parent shell closes, logs out, or SIGHUPs the
+/// process group.
 #[cfg(not(windows))]
 fn detach_and_exit(cli: &Cli) -> ! {
     use std::os::unix::process::CommandExt;
@@ -678,7 +680,16 @@ fn detach_and_exit(cli: &Cli) -> ! {
     let mut cmd = build_daemon_cmd(cli, &exe);
     unsafe {
         cmd.pre_exec(|| {
+            // New session → no controlling TTY, immune to shell SIGHUP.
             libc::setsid();
+            // Belt + suspenders: explicitly ignore SIGHUP so even if some
+            // orchestrator still delivers it (e.g. systemd lingering), we
+            // don't exit.
+            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+            // Change working dir to / so we don't hold a mount busy.
+            libc::chdir(b"/\0".as_ptr() as *const _);
+            // umask 0 for files we may create.
+            libc::umask(0);
             Ok(())
         });
     }

@@ -115,8 +115,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=$EXE
-Restart=on-failure
+Restart=always
 RestartSec=5s
+# Keep running even if the terminal that launched it closes.
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=default.target
