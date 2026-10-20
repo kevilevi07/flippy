@@ -278,16 +278,42 @@
         sendResize();
         term.focus();
       };
+      // ---------- Predictive local echo ----------
+      // Keystrokes appear in the terminal INSTANTLY (no 200-800 ms round-
+      // trip wait). When the server echoes the same byte back, we quietly
+      // drop it so there's no duplication. Entries age out after 2 s so
+      // characters typed into a non-echoing prompt (password, cat -v) stop
+      // being matched against unrelated later output.
+      //
+      // pendingEcho = [{ch:'a', t:1234567}, ...]
+      const pendingEcho = [];
+      const ECHO_TTL_MS = 2000;
+      const pruneEcho = () => {
+        const now = Date.now();
+        while (pendingEcho.length > 0 && now - pendingEcho[0].t > ECHO_TTL_MS) {
+          pendingEcho.shift();
+        }
+      };
+
       ws.onmessage = (ev) => {
         const data = typeof ev.data === 'string'
           ? ev.data
           : new TextDecoder().decode(new Uint8Array(ev.data));
-        // write() is async in newer xterm versions. Scroll + refresh on the
-        // completion callback so the cursor lands in the right place even
-        // when the server sends partial escape sequences.
-        term.write(data, () => {
-          try { term.scrollToBottom(); } catch (_) {}
-        });
+        pruneEcho();
+        if (pendingEcho.length === 0) {
+          term.write(data);
+          return;
+        }
+        // Consume matching bytes from the pending queue in order.
+        let out = '';
+        for (const ch of data) {
+          if (pendingEcho.length > 0 && pendingEcho[0].ch === ch) {
+            pendingEcho.shift();
+          } else {
+            out += ch;
+          }
+        }
+        if (out) term.write(out);
       };
       ws.onclose = () => {
         statusEl.textContent = 'disconnected';
@@ -300,6 +326,16 @@
       };
 
       term.onData((data) => {
+        // Local echo: for printable (space..~) bytes, write them to the
+        // terminal immediately AND remember them so the eventual server
+        // echo doesn't duplicate. Control codes and escape sequences are
+        // sent as-is without local echo (the shell may handle them in
+        // non-trivial ways — e.g. \b expands to "\b \b").
+        if (data.length > 0 && /^[\x20-\x7E]+$/.test(data)) {
+          term.write(data);
+          const now = Date.now();
+          for (const ch of data) pendingEcho.push({ ch, t: now });
+        }
         if (ws.readyState === WebSocket.OPEN) ws.send(data);
       });
 
