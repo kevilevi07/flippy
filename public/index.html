@@ -282,7 +282,12 @@
         const data = typeof ev.data === 'string'
           ? ev.data
           : new TextDecoder().decode(new Uint8Array(ev.data));
-        term.write(data);
+        // write() is async in newer xterm versions. Scroll + refresh on the
+        // completion callback so the cursor lands in the right place even
+        // when the server sends partial escape sequences.
+        term.write(data, () => {
+          try { term.scrollToBottom(); } catch (_) {}
+        });
       };
       ws.onclose = () => {
         statusEl.textContent = 'disconnected';
@@ -357,37 +362,50 @@
       document.addEventListener('mouseup', () => { isMouseDown = false; });
 
       // ---------- PASTE ----------
+      // One single path: read clipboard → send to terminal exactly once.
+      // Guarded by `pastingLock` so overlapping triggers (e.g. the browser's
+      // native Ctrl+V firing both the key handler AND a `paste` event on
+      // the hidden textarea) don't double-deliver.
       const sendToTerm = (txt) => {
         if (!txt) return;
         if (ws.readyState === WebSocket.OPEN) ws.send(txt);
-        term.focus();
       };
-      const triggerPaste = () => {
-        hiddenPaste.value = '';
-        hiddenPaste.focus();
-        if (navigator.clipboard && navigator.clipboard.readText) {
-          navigator.clipboard.readText().then(
-            (txt) => { if (txt) sendToTerm(txt); term.focus(); },
-            () => { term.focus(); toast('paste blocked', '#ff6b6b'); }
-          );
-        } else {
+      let pastingLock = false;
+      const triggerPaste = async () => {
+        if (pastingLock) return;
+        pastingLock = true;
+        try {
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            const txt = await navigator.clipboard.readText();
+            if (txt) sendToTerm(txt);
+          } else {
+            toast('paste not supported', '#ff6b6b');
+          }
+        } catch (_) {
+          toast('paste blocked — allow clipboard in browser settings', '#ff6b6b');
+        } finally {
           term.focus();
-          toast('paste not supported', '#ff6b6b');
+          // Short cooldown so a trailing `paste` event from the browser
+          // can't slip in and duplicate.
+          setTimeout(() => { pastingLock = false; }, 250);
         }
       };
 
-      hiddenPaste.addEventListener('paste', (e) => {
+      // Native paste event path (right-click → Paste from the browser menu
+      // when `triggerPaste` wasn't invoked). Still de-duped by the lock.
+      const onNativePaste = (e) => {
         e.preventDefault();
+        e.stopPropagation();
+        if (pastingLock) return;
+        pastingLock = true;
         const txt = (e.clipboardData || window.clipboardData).getData('text');
-        sendToTerm(txt);
-      });
-      termEl.addEventListener('paste', (e) => {
-        e.preventDefault();
-        const txt = (e.clipboardData || window.clipboardData).getData('text');
-        sendToTerm(txt);
-      });
+        if (txt) sendToTerm(txt);
+        setTimeout(() => { pastingLock = false; }, 250);
+      };
+      hiddenPaste.addEventListener('paste', onNativePaste);
+      termEl.addEventListener('paste', onNativePaste);
 
-      // Double-click to paste (clears any auto-selected word first)
+      // Double-click to paste
       termEl.addEventListener('dblclick', (e) => {
         e.preventDefault();
         term.clearSelection();

@@ -164,9 +164,10 @@ export const sets = {
 
 // Fast idle poll (when we've been quiet for a while) and burst poll (when a
 // message just arrived — likely more are on the way for the same channel).
-const IDLE_POLL_MS = 25;
-const BURST_POLL_MS = 5;
-const BURST_WINDOW_MS = 800;
+// Burst mode is super-tight so interactive keystrokes echo back fast.
+const IDLE_POLL_MS = 20;
+const BURST_POLL_MS = 2;
+const BURST_WINDOW_MS = 1500;
 // Drop messages older than this to keep the queue tiny.
 const MSG_TTL_SECONDS = 60;
 
