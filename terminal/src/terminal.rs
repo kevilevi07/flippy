@@ -278,8 +278,13 @@ async fn static_handler(uri: Uri) -> Response {
     match Assets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
+            // No-store so UI updates in a new binary are picked up immediately
+            // instead of a stale copy being served from the browser cache.
             (
-                [(header::CONTENT_TYPE, mime.as_ref())],
+                [
+                    (header::CONTENT_TYPE, mime.as_ref()),
+                    (header::CACHE_CONTROL, "no-store, must-revalidate"),
+                ],
                 content.data.into_owned(),
             )
                 .into_response()

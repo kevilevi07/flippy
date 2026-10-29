@@ -171,13 +171,30 @@ const BURST_WINDOW_MS = 4000;
 // Drop messages older than this to keep the queue tiny.
 const MSG_TTL_SECONDS = 60;
 
+// Per-channel insert chains. Keystrokes and PTY output chunks are published
+// back-to-back; if their INSERTs ran concurrently the BIGSERIAL ids (which
+// subscribers order by) could be assigned out of order, reordering frames and
+// scrambling the stream. Chaining each channel's inserts keeps them in call
+// order so delivery order == send order.
+const _pubChain = new Map<string, Promise<unknown>>();
+
 export const pubsub = {
   async publish(channel: string, payload: string): Promise<void> {
-    // Hot path: single INSERT, no extra queries. Cleanup runs out-of-band.
-    await q(
-      `INSERT INTO msg_queue(chan, payload) VALUES ($1, $2)`,
-      [channel, payload],
-    );
+    const prev = _pubChain.get(channel) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(() =>
+        q(`INSERT INTO msg_queue(chan, payload) VALUES ($1, $2)`, [
+          channel,
+          payload,
+        ]),
+      );
+    _pubChain.set(channel, next);
+    try {
+      await next;
+    } finally {
+      if (_pubChain.get(channel) === next) _pubChain.delete(channel);
+    }
   },
 
   async sweep(): Promise<void> {
