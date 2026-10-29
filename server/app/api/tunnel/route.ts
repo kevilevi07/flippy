@@ -22,6 +22,10 @@ export async function GET(req: Request): Promise<Response> {
   const requested = url.searchParams.get("name") ?? url.searchParams.get("tid");
   const hostname = (url.searchParams.get("hostname") ?? "").slice(0, 64);
 
+  // Single-user server: if a valid name is requested, we always honour it
+  // (even if a stale record exists from a previous Function instance). This
+  // keeps the public URL stable across Vercel's ~5-minute Function recycles
+  // — the CLI reconnects with the same name and the record is overwritten.
   let tid: string;
   if (requested) {
     const name: string = String(requested);
@@ -29,15 +33,13 @@ export async function GET(req: Request): Promise<Response> {
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "")
       .replace(/^-+|-+$/g, "");
-    if (isValidName(name)) {
-      const existing = await kv.get(keys.tunnel(name));
-      tid = existing ? `${name}-${newId(4)}` : name;
-    } else {
-      tid = `${stem || "term"}-${newId(4)}`;
-    }
+    tid = isValidName(name) ? name : (stem || `term-${newId(4)}`);
   } else {
     tid = newId(8);
   }
+  // Instance id so a stale close-handler on an older Function doesn't
+  // delete the record a newer connection has claimed.
+  const instanceId = newId(10);
 
   const publicBase = (process.env.TRUPX_PUBLIC_URL ?? url.origin)
     .replace(/^[﻿​\s]+/, "")
@@ -46,7 +48,11 @@ export async function GET(req: Request): Promise<Response> {
   const publicUrl = `${publicBase}/${tid}`;
 
   return upgradeWebSocket(async (ws: WebSocket) => {
-    const rec = JSON.stringify({ hostname, created_at: Date.now() });
+    const rec = JSON.stringify({
+      hostname,
+      created_at: Date.now(),
+      instance_id: instanceId,
+    });
     await kv.set(keys.tunnel(tid), rec, TUNNEL_TTL_SECONDS);
     sendFrame(ws, { type: "ready", tunnel_id: tid, public_url: publicUrl });
 
@@ -58,7 +64,9 @@ export async function GET(req: Request): Promise<Response> {
     });
 
     const ttlTimer: NodeJS.Timeout = setInterval(() => {
-      void kv.expire(keys.tunnel(tid), TUNNEL_TTL_SECONDS);
+      // Re-write the full record so a stale instance can't win the key by
+      // re-expiring an older row. Also keeps hostname fresh.
+      void kv.set(keys.tunnel(tid), rec, TUNNEL_TTL_SECONDS);
     }, 30_000);
 
     ws.on("message", async (data) => {
@@ -100,7 +108,18 @@ export async function GET(req: Request): Promise<Response> {
     ws.on("close", async () => {
       clearInterval(ttlTimer);
       await closeSub();
-      await kv.delete(keys.tunnel(tid));
+      // Only delete the record if it still belongs to this session. A newer
+      // reconnect may have already claimed the same name — in that case we
+      // must not evict their record.
+      try {
+        const cur = await kv.get(keys.tunnel(tid));
+        if (cur) {
+          const parsed = JSON.parse(cur) as { instance_id?: string };
+          if (parsed.instance_id === instanceId) {
+            await kv.delete(keys.tunnel(tid));
+          }
+        }
+      } catch { /* ignore */ }
     });
   });
 }

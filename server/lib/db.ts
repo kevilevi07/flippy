@@ -165,9 +165,9 @@ export const sets = {
 // Fast idle poll (when we've been quiet for a while) and burst poll (when a
 // message just arrived — likely more are on the way for the same channel).
 // Burst mode is super-tight so interactive keystrokes echo back fast.
-const IDLE_POLL_MS = 20;
+const IDLE_POLL_MS = 12;
 const BURST_POLL_MS = 2;
-const BURST_WINDOW_MS = 1500;
+const BURST_WINDOW_MS = 4000;
 // Drop messages older than this to keep the queue tiny.
 const MSG_TTL_SECONDS = 60;
 
@@ -206,7 +206,9 @@ export const pubsub = {
     let lastId = BigInt(r.rows[0]?.max_id ?? "0");
     let stopped = false;
 
-    let lastHit = 0;
+    // Start in burst mode so the first message after subscribe is caught at
+    // BURST_POLL_MS rather than waiting a full idle interval.
+    let lastHit = Date.now();
     const loop = async () => {
       while (!stopped) {
         try {

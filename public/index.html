@@ -279,41 +279,55 @@
         term.focus();
       };
       // ---------- Predictive local echo ----------
-      // Keystrokes appear in the terminal INSTANTLY (no 200-800 ms round-
-      // trip wait). When the server echoes the same byte back, we quietly
-      // drop it so there's no duplication. Entries age out after 2 s so
-      // characters typed into a non-echoing prompt (password, cat -v) stop
-      // being matched against unrelated later output.
+      // Each keystroke makes a full round-trip over the cloud relay, so raw
+      // server-only echo feels laggy. We optimistically render printable
+      // input locally and suppress the server's echo of those same bytes.
       //
-      // pendingEcho = [{ch:'a', t:1234567}, ...]
-      const pendingEcho = [];
-      const ECHO_TTL_MS = 2000;
-      const pruneEcho = () => {
-        const now = Date.now();
-        while (pendingEcho.length > 0 && now - pendingEcho[0].t > ECHO_TTL_MS) {
-          pendingEcho.shift();
-        }
-      };
+      // Safety:
+      //  * Gated start — the first character of every line is NOT drawn until
+      //    the server confirms the line echoes, so password prompts (echo off)
+      //    never reveal typed characters.
+      //  * Disabled while a full-screen app (vim/less/htop) owns the screen.
+      //  * On a misprediction the optimistic tail is erased and the server
+      //    output becomes authoritative.
+      let line = '';   // printable chars sent on the current line, oldest first
+      let nConf = 0;   // chars of `line` the server has echoed back
+      let nDisp = 0;   // chars of `line` currently drawn on screen (prefix)
+      let altScreen = false;
+      const isPrintable = (ch) => ch >= ' ' && ch <= '~';
+      const resetLine = () => { line = ''; nConf = 0; nDisp = 0; };
 
       ws.onmessage = (ev) => {
-        const data = typeof ev.data === 'string'
+        let data = typeof ev.data === 'string'
           ? ev.data
           : new TextDecoder().decode(new Uint8Array(ev.data));
-        pruneEcho();
-        if (pendingEcho.length === 0) {
-          term.write(data);
-          return;
+
+        if (data.indexOf('\x1b[?1049h') !== -1 || data.indexOf('\x1b[?47h') !== -1) altScreen = true;
+        if (data.indexOf('\x1b[?1049l') !== -1 || data.indexOf('\x1b[?47l') !== -1) altScreen = false;
+        if (altScreen) { resetLine(); term.write(data); return; }
+
+        let i = 0;
+        // Consume the server's echo of characters we're still tracking.
+        while (i < data.length && nConf < line.length &&
+               data[i] === line[nConf] && isPrintable(data[i])) {
+          if (nDisp <= nConf) { term.write(data[i]); nDisp = nConf + 1; } // was gated → draw now
+          nConf++;
+          i++;
         }
-        // Consume matching bytes from the pending queue in order.
-        let out = '';
-        for (const ch of data) {
-          if (pendingEcho.length > 0 && pendingEcho[0].ch === ch) {
-            pendingEcho.shift();
-          } else {
-            out += ch;
+        // Echo confirmed for this line → draw any typed-but-still-gated tail.
+        if (nConf >= 1 && nDisp < line.length) {
+          term.write(line.slice(nDisp));
+          nDisp = line.length;
+        }
+        if (i > 0) data = data.slice(i);
+        if (data.length) {
+          // Misprediction: we drew chars past what the server actually echoed.
+          if (nConf < line.length && nDisp > nConf) {
+            term.write('\b \b'.repeat(nDisp - nConf));
           }
+          resetLine();
+          term.write(data);
         }
-        if (out) term.write(out);
       };
       ws.onclose = () => {
         statusEl.textContent = 'disconnected';
@@ -326,17 +340,18 @@
       };
 
       term.onData((data) => {
-        // Local echo: for printable (space..~) bytes, write them to the
-        // terminal immediately AND remember them so the eventual server
-        // echo doesn't duplicate. Control codes and escape sequences are
-        // sent as-is without local echo (the shell may handle them in
-        // non-trivial ways — e.g. \b expands to "\b \b").
-        if (data.length > 0 && /^[\x20-\x7E]+$/.test(data)) {
-          term.write(data);
-          const now = Date.now();
-          for (const ch of data) pendingEcho.push({ ch, t: now });
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(data);
+        if (altScreen) return;
+        if (data.length === 1 && isPrintable(data)) {
+          line += data;
+          // Predict only once the server has confirmed this line echoes;
+          // the first char stays gated until then.
+          if (nConf >= 1) { term.write(data); nDisp = line.length; }
         }
-        if (ws.readyState === WebSocket.OPEN) ws.send(data);
+        // Enter / Backspace / arrows / Ctrl / Esc / multi-char paste: no local
+        // prediction. `line` is kept so in-flight echoes stay suppressed, and
+        // the next authoritative server output resets the epoch.
       });
 
       window.addEventListener('resize', () => { fitAddon.fit(); sendResize(); });
