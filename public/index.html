@@ -278,56 +278,42 @@
         sendResize();
         term.focus();
       };
-      // ---------- Predictive local echo ----------
-      // Each keystroke makes a full round-trip over the cloud relay, so raw
-      // server-only echo feels laggy. We optimistically render printable
-      // input locally and suppress the server's echo of those same bytes.
+      // ---------- Predictive local echo (repaint-safe) ----------
+      // On a distant relay each keystroke round-trips before it echoes, so
+      // typing feels laggy. We draw printable input locally right away, but
+      // the server is ALWAYS authoritative: the instant any server output
+      // arrives we erase our optimistic characters and render the server's
+      // bytes. Because we never try to match or suppress the echo, this can
+      // never scramble the line — it works the same whether the remote shell
+      // echoes one char at a time (bash) or repaints the whole line on every
+      // keystroke (PowerShell / PSReadLine over Windows ConPTY).
       //
-      // Safety:
-      //  * Gated start — the first character of every line is NOT drawn until
-      //    the server confirms the line echoes, so password prompts (echo off)
-      //    never reveal typed characters.
-      //  * Disabled while a full-screen app (vim/less/htop) owns the screen.
-      //  * On a misprediction the optimistic tail is erased and the server
-      //    output becomes authoritative.
-      let line = '';   // printable chars sent on the current line, oldest first
-      let nConf = 0;   // chars of `line` the server has echoed back
-      let nDisp = 0;   // chars of `line` currently drawn on screen (prefix)
+      // Password safety: the first keystroke after any newline is "gated" —
+      // nothing is drawn until the server responds at least once. An echo-off
+      // prompt (a password) produces no response, so the keys stay hidden.
+      let pred = '';         // chars drawn optimistically, not yet reconciled
+      let echoOn = false;    // server has responded since the last line start
       let altScreen = false;
       const isPrintable = (ch) => ch >= ' ' && ch <= '~';
-      const resetLine = () => { line = ''; nConf = 0; nDisp = 0; };
+      const clearPred = () => {
+        if (pred) { term.write('\b \b'.repeat(pred.length)); pred = ''; }
+      };
 
       ws.onmessage = (ev) => {
-        let data = typeof ev.data === 'string'
+        const data = typeof ev.data === 'string'
           ? ev.data
           : new TextDecoder().decode(new Uint8Array(ev.data));
 
         if (data.indexOf('\x1b[?1049h') !== -1 || data.indexOf('\x1b[?47h') !== -1) altScreen = true;
         if (data.indexOf('\x1b[?1049l') !== -1 || data.indexOf('\x1b[?47l') !== -1) altScreen = false;
-        if (altScreen) { resetLine(); term.write(data); return; }
 
-        let i = 0;
-        // Consume the server's echo of characters we're still tracking.
-        while (i < data.length && nConf < line.length &&
-               data[i] === line[nConf] && isPrintable(data[i])) {
-          if (nDisp <= nConf) { term.write(data[i]); nDisp = nConf + 1; } // was gated → draw now
-          nConf++;
-          i++;
-        }
-        // Echo confirmed for this line → draw any typed-but-still-gated tail.
-        if (nConf >= 1 && nDisp < line.length) {
-          term.write(line.slice(nDisp));
-          nDisp = line.length;
-        }
-        if (i > 0) data = data.slice(i);
-        if (data.length) {
-          // Misprediction: we drew chars past what the server actually echoed.
-          if (nConf < line.length && nDisp > nConf) {
-            term.write('\b \b'.repeat(nDisp - nConf));
-          }
-          resetLine();
-          term.write(data);
-        }
+        // Server output reconciles the screen: drop optimistic chars, then let
+        // the authoritative bytes render.
+        clearPred();
+        term.write(data);
+        // A newline means a fresh input line may be starting (including an
+        // echo-off password read) — re-gate until the server responds again.
+        echoOn = !altScreen && data.indexOf('\n') === -1;
       };
       ws.onclose = () => {
         statusEl.textContent = 'disconnected';
@@ -344,14 +330,15 @@
         ws.send(data);
         if (altScreen) return;
         if (data.length === 1 && isPrintable(data)) {
-          line += data;
-          // Predict only once the server has confirmed this line echoes;
-          // the first char stays gated until then.
-          if (nConf >= 1) { term.write(data); nDisp = line.length; }
+          // Draw instantly, but only once the server has echoed at least once
+          // on this line (keeps password prompts blank).
+          if (echoOn) { term.write(data); pred += data; }
+        } else if (data === '\x7f' || data === '\b') {
+          // Optimistic backspace over our own prediction only.
+          if (pred) { term.write('\b \b'); pred = pred.slice(0, -1); }
         }
-        // Enter / Backspace / arrows / Ctrl / Esc / multi-char paste: no local
-        // prediction. `line` is kept so in-flight echoes stay suppressed, and
-        // the next authoritative server output resets the epoch.
+        // Enter / arrows / Ctrl / Esc / multi-char paste: no local echo; the
+        // server output reconciles the screen.
       });
 
       window.addEventListener('resize', () => { fitAddon.fit(); sendResize(); });
