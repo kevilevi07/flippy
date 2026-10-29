@@ -144,5 +144,13 @@ try { & $ExePath --server $Server login --token "noop" 2>&1 | Out-Null } catch {
 try { Start-Process -FilePath $ExePath -WindowStyle Hidden } catch { }
 L "spawned tunnel daemon"
 
-# Close the terminal/PowerShell window that ran the installer.
-try { Stop-Process -Id $PID -Force } catch { exit }
+# ---- Done ----
+# NOTE: do NOT kill the host terminal here. Force-stopping $PID makes PowerShell
+# exit with code 0xffffffff, which looks like the install crashed.
+Write-Host ""
+Write-Host "trupx installed." -ForegroundColor Green
+Write-Host "Location : $ExePath"
+Write-Host "A tunnel is starting in the background — view it at $Server/dashboard"
+Write-Host "Open a NEW terminal, then: trupx status | trupx stop | trupx uninstall"
+Write-Host ""
+exit 0
