@@ -207,6 +207,8 @@
     });
 
     document.getElementById('logout-btn').addEventListener('click', async () => {
+      manualClose = true;
+      try { if (ws) ws.close(); } catch (_) {}
       await fetch('/api/logout', { method: 'POST' });
       location.reload();
     });
@@ -233,7 +235,7 @@
     document.getElementById('fullscreen-btn').addEventListener('click', toggleFullscreen);
 
     // ---------- TERMINAL ----------
-    let ws = null, term = null, fitAddon = null;
+    let ws = null, term = null, fitAddon = null, manualClose = false;
     const sendResize = () => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       ws.send('\x01' + JSON.stringify({
@@ -268,16 +270,6 @@
       term.open(termEl);
       fitAddon.fit();
 
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/ws`);
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        statusEl.textContent = 'connected';
-        statusEl.className = 'connected';
-        sendResize();
-        term.focus();
-      };
       // ---------- Predictive local echo (repaint-safe) ----------
       // On a distant relay each keystroke round-trips before it echoes, so
       // typing feels laggy. We draw printable input locally right away, but
@@ -291,6 +283,8 @@
       // Password safety: the first keystroke after any newline is "gated" —
       // nothing is drawn until the server responds at least once. An echo-off
       // prompt (a password) produces no response, so the keys stay hidden.
+      //
+      // These live outside connect() so they survive reconnects.
       let pred = '';         // chars drawn optimistically, not yet reconciled
       let echoOn = false;    // server has responded since the last line start
       let altScreen = false;
@@ -299,31 +293,71 @@
         if (pred) { term.write('\b \b'.repeat(pred.length)); pred = ''; }
       };
 
-      ws.onmessage = (ev) => {
-        const data = typeof ev.data === 'string'
-          ? ev.data
-          : new TextDecoder().decode(new Uint8Array(ev.data));
+      // ---------- Connection (with transparent auto-reconnect) ----------
+      // The public tunnel runs over serverless Functions that recycle on a
+      // duration cap (~60s on some plans), so the browser↔gateway socket is
+      // expected to drop periodically. The shell itself lives on in the CLI,
+      // so we just reconnect and the server replays recent scrollback. The
+      // user shouldn't notice more than a brief "reconnecting…" flicker.
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      let hasConnectedOnce = false;
+      let reconnectTimer = null;
+      let reconnectDelay = 500;
 
-        if (data.indexOf('\x1b[?1049h') !== -1 || data.indexOf('\x1b[?47h') !== -1) altScreen = true;
-        if (data.indexOf('\x1b[?1049l') !== -1 || data.indexOf('\x1b[?47l') !== -1) altScreen = false;
+      function connect() {
+        ws = new WebSocket(`${proto}://${location.host}/ws`);
+        ws.binaryType = 'arraybuffer';
 
-        // Server output reconciles the screen: drop optimistic chars, then let
-        // the authoritative bytes render.
-        clearPred();
-        term.write(data);
-        // A newline means a fresh input line may be starting (including an
-        // echo-off password read) — re-gate until the server responds again.
-        echoOn = !altScreen && data.indexOf('\n') === -1;
-      };
-      ws.onclose = () => {
-        statusEl.textContent = 'disconnected';
-        statusEl.className = 'disconnected';
-        term.write('\r\n\x1b[33m[trupx] session closed — click LOGOUT to reconnect\x1b[0m\r\n');
-      };
-      ws.onerror = () => {
-        statusEl.textContent = 'error';
-        statusEl.className = 'disconnected';
-      };
+        ws.onopen = () => {
+          reconnectDelay = 500;
+          statusEl.textContent = 'connected';
+          statusEl.className = 'connected';
+          // On a RE-connect, clear the screen so the server's scrollback replay
+          // repaints cleanly instead of stacking on top of the old contents.
+          if (hasConnectedOnce) term.reset();
+          hasConnectedOnce = true;
+          pred = ''; echoOn = false; altScreen = false;
+          sendResize();
+          term.focus();
+        };
+
+        ws.onmessage = (ev) => {
+          const data = typeof ev.data === 'string'
+            ? ev.data
+            : new TextDecoder().decode(new Uint8Array(ev.data));
+
+          if (data.indexOf('\x1b[?1049h') !== -1 || data.indexOf('\x1b[?47h') !== -1) altScreen = true;
+          if (data.indexOf('\x1b[?1049l') !== -1 || data.indexOf('\x1b[?47l') !== -1) altScreen = false;
+
+          // Server output reconciles the screen: drop optimistic chars, then let
+          // the authoritative bytes render.
+          clearPred();
+          term.write(data);
+          // A newline means a fresh input line may be starting (including an
+          // echo-off password read) — re-gate until the server responds again.
+          echoOn = !altScreen && data.indexOf('\n') === -1;
+        };
+
+        ws.onclose = () => {
+          if (manualClose) {
+            statusEl.textContent = 'disconnected';
+            statusEl.className = 'disconnected';
+            return;
+          }
+          // Expected drop (Function recycle / network blip): reconnect quietly.
+          statusEl.textContent = 'reconnecting…';
+          statusEl.className = 'disconnected';
+          clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, reconnectDelay);
+          reconnectDelay = Math.min(Math.round(reconnectDelay * 1.5), 3000);
+        };
+
+        ws.onerror = () => {
+          statusEl.textContent = 'reconnecting…';
+          statusEl.className = 'disconnected';
+        };
+      }
+      connect();
 
       term.onData((data) => {
         if (ws.readyState !== WebSocket.OPEN) return;
