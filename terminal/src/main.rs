@@ -75,6 +75,17 @@ enum Cmd {
     Daemon,
 }
 
+/// Generate a stable, URL-safe tunnel slug (lowercase a-z0-9, 8 chars). Used
+/// once on first run and then persisted to config so the public URL is fixed.
+fn gen_tunnel_id() -> String {
+    use rand::{distributions::Alphanumeric, Rng};
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(8)
+        .map(|b| (b as char).to_ascii_lowercase())
+        .collect()
+}
+
 fn main() {
     let mut cli = Cli::parse();
     let is_daemon = matches!(cli.command, Some(Cmd::Daemon));
@@ -217,9 +228,26 @@ fn main() {
             if cfg.server.is_none() {
                 cfg.server = Some("https://trupx.vercel.app".to_string());
             }
+            // Pick a STABLE tunnel id so the public URL survives both
+            // reconnects and process restarts. Priority: an explicit --name,
+            // then a previously saved id, then a freshly generated one (which
+            // we persist). Without this the server hands out a new random slug
+            // on every fresh start and the URL keeps changing.
+            let effective_name: String = tunnel_name
+                .clone()
+                .or_else(|| cfg.tunnel_id.clone())
+                .unwrap_or_else(gen_tunnel_id);
+            if cfg.tunnel_id.as_deref() != Some(effective_name.as_str()) {
+                cfg.tunnel_id = Some(effective_name.clone());
+                if let Err(e) = cfg.save() {
+                    terminal::append_log(&format!(
+                        "tunnel: could not persist tunnel id: {}", e
+                    ));
+                }
+            }
             terminal::append_log(&format!(
                 "tunnel starting: server={} name={:?}",
-                cfg.server.as_deref().unwrap_or("?"), tunnel_name
+                cfg.server.as_deref().unwrap_or("?"), effective_name
             ));
             // Wait for the real bound port (chosen by the OS) before the
             // tunnel forwarder tries to connect to it.
@@ -230,7 +258,7 @@ fn main() {
             };
             Some(tokio::spawn(async move {
                 let local_host = "127.0.0.1".to_string();
-                if let Err(e) = tunnel::run(&cfg, &local_host, actual_port, tunnel_name).await {
+                if let Err(e) = tunnel::run(&cfg, &local_host, actual_port, Some(effective_name)).await {
                     terminal::append_log(&format!("tunnel ended: {}", e));
                 }
             }))

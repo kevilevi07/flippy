@@ -108,18 +108,13 @@ export async function GET(req: Request): Promise<Response> {
     ws.on("close", async () => {
       clearInterval(ttlTimer);
       await closeSub();
-      // Only delete the record if it still belongs to this session. A newer
-      // reconnect may have already claimed the same name — in that case we
-      // must not evict their record.
-      try {
-        const cur = await kv.get(keys.tunnel(tid));
-        if (cur) {
-          const parsed = JSON.parse(cur) as { instance_id?: string };
-          if (parsed.instance_id === instanceId) {
-            await kv.delete(keys.tunnel(tid));
-          }
-        }
-      } catch { /* ignore */ }
+      // Intentionally DO NOT delete the tunnel record here. Vercel recycles
+      // this Function at its duration cap (~5 min) and the CLI immediately
+      // reconnects with the same name; deleting on close would make the
+      // public URL 404 during that sub-second gap — which is exactly the
+      // "tunnel not found or offline" the user hit. The record carries a short
+      // TTL (TUNNEL_TTL_SECONDS), so if the CLI genuinely goes away it expires
+      // on its own within a couple of minutes.
     });
   });
 }
